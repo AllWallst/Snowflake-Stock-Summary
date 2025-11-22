@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="MarketRadar", page_icon="📡")
@@ -332,7 +333,7 @@ def get_news_data(article):
         
     # 2. Extract Link
     link = article.get('link')
-    if isinstance(link, dict): # Fix dictionary links
+    if isinstance(link, dict):
         link = link.get('url')
         
     if not link and 'content' in article:
@@ -343,22 +344,33 @@ def get_news_data(article):
     if not link:
         link = article.get('clickThroughUrl', 'https://finance.yahoo.com')
     
-    # 3. Extract Publisher (The Fix)
+    # 3. Extract Publisher
     publisher = "Unknown"
     
-    # Case A: 'provider' key (Common in new API)
+    # Priority A: 'provider' key
     if 'provider' in article:
         provider = article['provider']
         if isinstance(provider, dict):
             publisher = provider.get('displayName') or provider.get('title') or "Unknown"
             
-    # Case B: 'publisher' key (Old API)
+    # Priority B: 'publisher' key
     elif 'publisher' in article:
         pub = article['publisher']
         if isinstance(pub, dict):
             publisher = pub.get('title') or pub.get('name') or "Unknown"
         else:
             publisher = str(pub)
+            
+    # Priority C: Fallback to Domain Name (e.g. 'www.barrons.com' -> 'Barrons')
+    if publisher == "Unknown" and link:
+        try:
+            domain = urlparse(link).netloc
+            # Remove www. and get the first part (e.g. bloomberg.com -> bloomberg)
+            clean_domain = domain.replace('www.', '').split('.')[0]
+            if clean_domain:
+                publisher = clean_domain.capitalize()
+        except:
+            pass
             
     return title, link, publisher, article.get('providerPublishTime', 0)
 
@@ -376,12 +388,17 @@ if news_list:
             except:
                 date_str = ""
         
+        # Clean UI: Only show the pipe "|" if we actually have a publisher name
+        if publisher and publisher != "Unknown":
+            meta_text = f"{publisher} | {date_str}"
+        else:
+            meta_text = date_str
+
         st.markdown(f"""
         <div class="news-card">
             <a href="{link}" target="_blank" class="news-title">{title}</a><br>
-            <span class="news-meta">{publisher} | {date_str}</span>
+            <span class="news-meta">{meta_text}</span>
         </div>
         """, unsafe_allow_html=True)
 else:
     st.write("No recent news found via API.")
-
