@@ -13,7 +13,7 @@ st.set_page_config(layout="wide", page_title="MarketRadar", page_icon="📡")
 st.markdown("""
     <style>
     .stApp { background-color: #1b222d; color: white; }
-    h1, h2, h3 { color: #00d09c !important; }
+    h1, h2, h3, h4 { color: #00d09c !important; }
     div[data-testid="stMetricValue"] { font-size: 1.4rem !important; color: white !important; }
     div[data-testid="stMetricLabel"] { color: #8c97a7 !important; }
     .css-1d391kg { background-color: #232b36; border-radius: 15px; padding: 20px; }
@@ -21,6 +21,7 @@ st.markdown("""
     .news-card { background-color: #232b36; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 4px solid #00d09c; }
     .news-title { color: white; font-weight: bold; font-size: 1.1em; text-decoration: none; }
     .news-meta { color: #8c97a7; font-size: 0.85em; }
+    .stRadio > div { display: flex; justify-content: flex-start; gap: 10px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -62,7 +63,6 @@ except Exception as e:
     st.stop()
 
 # --- CALCULATION FUNCTIONS ---
-
 def calc_graham(info):
     eps = info.get('trailingEps', 0)
     bv = info.get('bookValue', 0)
@@ -188,155 +188,217 @@ with col2:
 
 st.divider()
 
-# --- INTERACTIVE PRICE HISTORY CHART ---
+# --- PRICE HISTORY ---
 st.header("Price History")
+chart_type = st.radio("Select Timeframe:", ["Long Term (Daily)", "Short Term (Intraday)"], horizontal=True, label_visibility="collapsed")
 
-# Add a Toggle to switch between Long Term (Daily) and Short Term (Intraday)
-chart_type = st.radio(
-    "Select Timeframe:", 
-    ["Long Term (Daily)", "Short Term (Intraday)"], 
-    horizontal=True,
-    label_visibility="collapsed" # Hides the label for a cleaner look
-)
-
-# Logic to fetch data based on selection
 if chart_type == "Short Term (Intraday)":
-    # Fetch 5 days of 15-minute data
     hist_data = stock.history(period="5d", interval="15m")
-    
-    # Define buttons for Intraday
-    buttons = list([
-        dict(count=1, label="1d", step="day", stepmode="backward"),
-        dict(count=5, label="5d", step="day", stepmode="backward"),
-        dict(step="all", label="Show All")
-    ])
-    line_color = '#36a2eb' # Blue for short term
-    
+    buttons = list([dict(count=1, label="1d", step="day", stepmode="backward"), dict(count=5, label="5d", step="day", stepmode="backward"), dict(step="all", label="Show All")])
+    line_color = '#36a2eb'
 else:
-    # Fetch Max history of Daily data
     hist_data = stock.history(period="max", interval="1d")
-    
-    # Define buttons for Daily
-    buttons = list([
-        dict(count=1, label="1m", step="month", stepmode="backward"),
-        dict(count=6, label="6m", step="month", stepmode="backward"),
-        dict(count=1, label="YTD", step="year", stepmode="todate"),
-        dict(count=1, label="1y", step="year", stepmode="backward"),
-        dict(count=5, label="5y", step="year", stepmode="backward"),
-        dict(step="all", label="MAX")
-    ])
-    line_color = '#00d09c' # Green for long term
+    buttons = list([dict(count=1, label="1m", step="month", stepmode="backward"), dict(count=6, label="6m", step="month", stepmode="backward"), dict(count=1, label="YTD", step="year", stepmode="todate"), dict(count=1, label="1y", step="year", stepmode="backward"), dict(count=5, label="5y", step="year", stepmode="backward"), dict(step="all", label="MAX")])
+    line_color = '#00d09c'
 
-# Render the Chart
 if not hist_data.empty:
     fig_price = go.Figure()
-    
-    # Main Line
-    fig_price.add_trace(go.Scatter(
-        x=hist_data.index, 
-        y=hist_data['Close'],
-        mode='lines',
-        name='Close Price',
-        line=dict(color=line_color, width=2),
-        fill='tozeroy', 
-        fillcolor=f"rgba({int(line_color[1:3], 16)}, {int(line_color[3:5], 16)}, {int(line_color[5:7], 16)}, 0.1)"
-    ))
-
-    # Range Selector Buttons
-    fig_price.update_xaxes(
-        rangeslider_visible=True,
-        rangeselector=dict(
-            buttons=buttons,
-            bgcolor="#2c3542",
-            activecolor=line_color,
-            font=dict(color="white")
-        )
-    )
-
-    fig_price.update_layout(
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='white'),
-        xaxis=dict(gridcolor='#36404e'),
-        yaxis=dict(gridcolor='#36404e'),
-        height=400,
-        margin=dict(l=0, r=0)
-    )
+    fig_price.add_trace(go.Scatter(x=hist_data.index, y=hist_data['Close'], mode='lines', name='Close', line=dict(color=line_color, width=2), fill='tozeroy', fillcolor=f"rgba({int(line_color[1:3], 16)}, {int(line_color[3:5], 16)}, {int(line_color[5:7], 16)}, 0.1)"))
+    fig_price.update_xaxes(rangeslider_visible=True, rangeselector=dict(buttons=buttons, bgcolor="#2c3542", activecolor=line_color, font=dict(color="white")))
+    fig_price.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), xaxis=dict(gridcolor='#36404e'), yaxis=dict(gridcolor='#36404e'), height=400, margin=dict(l=0, r=0))
     st.plotly_chart(fig_price, use_container_width=True)
-else:
-    st.write("Historical price data unavailable.")
 
 st.divider()
 
-# --- 1. VALUATION SECTION ---
+# --- 1. VALUATION ---
 st.header("1. Valuation")
 v_col_left, v_col_right = st.columns([2, 1])
-
 with v_col_left:
     st.subheader("Share Price vs Fair Value")
     diff = ((current_price - fair_value) / fair_value) * 100
     status_color = "#ff6384" if diff > 20 else "#ffce56" if diff > -20 else "#00d09c"
     status_text = "Overvalued" if diff > 0 else "Undervalued"
-    
-    st.markdown(f"""
-    The stock is trading at **${current_price}**. Our estimated Fair Value is **${fair_value:.2f}**.
-    It appears to be <span style="color:{status_color}; font-weight:bold;">{abs(diff):.1f}% {status_text}</span>.
-    <br><small style="color:#8c97a7">Calculation Method: {calc_desc}</small>
-    """, unsafe_allow_html=True)
-    
+    st.markdown(f"The stock is trading at **${current_price}**. Fair Value: **${fair_value:.2f}**. It is <span style='color:{status_color}; font-weight:bold;'>{abs(diff):.1f}% {status_text}</span>.<br><small style='color:#8c97a7'>Method: {calc_desc}</small>", unsafe_allow_html=True)
     max_val = max(current_price, fair_value) * 1.3
     fig_val = go.Figure()
     fig_val.add_vrect(x0=0, x1=fair_value*0.8, fillcolor="#00d09c", opacity=0.15, layer="below", line_width=0)
     fig_val.add_vrect(x0=fair_value*0.8, x1=fair_value*1.2, fillcolor="#ffce56", opacity=0.15, layer="below", line_width=0)
     fig_val.add_vrect(x0=fair_value*1.2, x1=max_val*1.5, fillcolor="#ff6384", opacity=0.15, layer="below", line_width=0)
-
-    fig_val.add_trace(go.Bar(y=[""], x=[current_price], name="Current Price", orientation='h', marker_color='#36a2eb', width=0.3, text=f"Current: ${current_price}", textposition='auto'))
-    fig_val.add_trace(go.Bar(y=[""], x=[fair_value], name="Fair Value", orientation='h', marker_color='#232b36', marker_line_color='white', marker_line_width=2, width=0.3, text=f"Fair Value: ${fair_value:.2f}", textposition='auto'))
-
+    fig_val.add_trace(go.Bar(y=[""], x=[current_price], name="Current", orientation='h', marker_color='#36a2eb', width=0.3, text=f"${current_price}", textposition='auto'))
+    fig_val.add_trace(go.Bar(y=[""], x=[fair_value], name="Fair Value", orientation='h', marker_color='#232b36', marker_line_color='white', marker_line_width=2, width=0.3, text=f"${fair_value:.2f}", textposition='auto'))
     fig_val.update_layout(xaxis=dict(range=[0, max_val], visible=False), yaxis=dict(visible=False), barmode='group', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=150, margin=dict(t=0, b=0, l=0, r=0), showlegend=False)
     st.plotly_chart(fig_val, use_container_width=True)
-    st.caption("🟩 Undervalued (<20%) | 🟨 Fair Value | 🟥 Overvalued (>20%)")
-
 with v_col_right:
     st.metric("P/E Ratio", f"{info.get('trailingPE', 0):.1f}")
     st.metric("PEG Ratio", f"{peg:.2f}" if peg else "N/A")
-    if graham_fv > 0: st.metric("Graham Number", f"${graham_fv:.2f}")
-    else: st.metric("Graham Number", "N/A")
+    st.metric("Graham Number", f"${graham_fv:.2f}" if graham_fv else "N/A")
 
 st.divider()
 
-# --- 2. FUTURE & PAST ---
+# --- NEW: FINANCIALS SECTION ---
+st.header("Financials")
+
+# Toggle for Annual vs Quarterly
+fin_period = st.radio("Frequency:", ["Annual", "Quarterly"], horizontal=True)
+
+# Fetch Data based on selection
+if fin_period == "Annual":
+    financials = stock.financials.T
+    balance_sheet = stock.balance_sheet.T
+    cash_flow = stock.cashflow.T
+    date_fmt = "%Y"
+else:
+    financials = stock.quarterly_financials.T
+    balance_sheet = stock.quarterly_balance_sheet.T
+    cash_flow = stock.quarterly_cashflow.T
+    date_fmt = "%Y-%m"
+
+# Reverse to show oldest to newest
+financials = financials.iloc[::-1]
+balance_sheet = balance_sheet.iloc[::-1]
+cash_flow = cash_flow.iloc[::-1]
+dates = [d.strftime(date_fmt) for d in financials.index]
+
+# 1. Performance (Rev vs Net Income vs Margin)
+st.subheader("Performance")
+if not financials.empty:
+    rev = financials.get('Total Revenue', financials.get('Revenue', []))
+    net_inc = financials.get('Net Income', [])
+    
+    if len(rev) > 0 and len(net_inc) > 0:
+        margin = (net_inc / rev) * 100
+        
+        fig_perf = go.Figure()
+        fig_perf.add_trace(go.Bar(x=dates, y=rev, name='Revenue', marker_color='#36a2eb'))
+        fig_perf.add_trace(go.Bar(x=dates, y=net_inc, name='Net Income', marker_color='#00d09c'))
+        fig_perf.add_trace(go.Scatter(x=dates, y=margin, name='Net Margin %', yaxis='y2', mode='lines+markers', line=dict(color='white', width=2)))
+        
+        fig_perf.update_layout(
+            yaxis=dict(showgrid=True, gridcolor='#36404e', title="Amount"),
+            yaxis2=dict(title="Margin %", overlaying='y', side='right', showgrid=False),
+            barmode='group',
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'),
+            legend=dict(orientation="h", y=1.1)
+        )
+        st.plotly_chart(fig_perf, use_container_width=True)
+
+# 2. Revenue to Profit (Waterfall) - Latest Period
+st.subheader("Revenue to Profit Conversion (Latest)")
+if not financials.empty:
+    latest = financials.iloc[-1]
+    rev_val = latest.get('Total Revenue', latest.get('Revenue', 0))
+    cost_rev = latest.get('Cost Of Revenue', 0)
+    gross_profit = latest.get('Gross Profit', 0)
+    op_exp = latest.get('Operating Expense', 0)
+    net_val = latest.get('Net Income', 0)
+    
+    # Calculate implicit "Other" to make waterfall balance
+    # Revenue - COGS - OpEx - Other = Net Income
+    # Other = Revenue - COGS - OpEx - Net Income
+    other_exp = rev_val - cost_rev - op_exp - net_val
+    
+    fig_water = go.Figure(go.Waterfall(
+        orientation = "v",
+        measure = ["relative", "relative", "total", "relative", "relative", "total"],
+        x = ["Revenue", "COGS", "Gross Profit", "Op Expenses", "Other/Tax", "Net Income"],
+        textposition = "outside",
+        text = [f"{rev_val/1e9:.1f}B", f"-{cost_rev/1e9:.1f}B", f"{gross_profit/1e9:.1f}B", f"-{op_exp/1e9:.1f}B", f"-{other_exp/1e9:.1f}B", f"{net_val/1e9:.1f}B"],
+        y = [rev_val, -cost_rev, gross_profit, -op_exp, -other_exp, net_val],
+        connector = {"line":{"color":"white"}},
+        decreasing = {"marker":{"color":"#ff6384"}},
+        increasing = {"marker":{"color":"#00d09c"}},
+        totals = {"marker":{"color":"#36a2eb"}}
+    ))
+    fig_water.update_layout(
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'),
+        yaxis=dict(showgrid=True, gridcolor='#36404e')
+    )
+    st.plotly_chart(fig_water, use_container_width=True)
+
+# 3. Debt Level & Coverage
+st.subheader("Debt Level and Coverage")
+if not balance_sheet.empty and not cash_flow.empty:
+    # Align dates
+    common_idx = balance_sheet.index.intersection(cash_flow.index)
+    bs_align = balance_sheet.loc[common_idx]
+    cf_align = cash_flow.loc[common_idx]
+    d_dates = [d.strftime(date_fmt) for d in common_idx]
+    
+    debt = bs_align.get('Total Debt', [])
+    cash = bs_align.get('Cash And Cash Equivalents', [])
+    fcf = cf_align.get('Free Cash Flow', [])
+    
+    fig_debt = go.Figure()
+    fig_debt.add_trace(go.Bar(x=d_dates, y=debt, name='Total Debt', marker_color='#ff6384'))
+    fig_debt.add_trace(go.Bar(x=d_dates, y=fcf, name='Free Cash Flow', marker_color='#00d09c'))
+    fig_debt.add_trace(go.Bar(x=d_dates, y=cash, name='Cash', marker_color='#36a2eb'))
+    
+    fig_debt.update_layout(
+        barmode='group',
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'),
+        yaxis=dict(showgrid=True, gridcolor='#36404e'),
+        legend=dict(orientation="h", y=1.1)
+    )
+    st.plotly_chart(fig_debt, use_container_width=True)
+
+# 4. Earnings (Actual vs Estimate)
+st.subheader("Earnings (EPS): Actual vs Estimate")
+try:
+    earn_hist = stock.earnings_history
+    if earn_hist is not None and not earn_hist.empty:
+        # Sort by date
+        earn_hist = earn_hist.sort_values(by="startdatetime")
+        e_dates = [d.strftime("%Y-%m-%d") for d in earn_hist["startdatetime"]]
+        actual = earn_hist["epsactual"]
+        estimate = earn_hist["epsestimate"]
+        
+        fig_earn = go.Figure()
+        fig_earn.add_trace(go.Scatter(x=e_dates, y=estimate, mode='markers', name='Estimate', marker=dict(color='gray', size=10, symbol='circle-open')))
+        fig_earn.add_trace(go.Scatter(x=e_dates, y=actual, mode='markers', name='Actual', marker=dict(color='#00d09c', size=10)))
+        
+        fig_earn.update_layout(
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'),
+            xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#36404e'),
+            legend=dict(orientation="h", y=1.1)
+        )
+        st.plotly_chart(fig_earn, use_container_width=True)
+    else:
+        st.write("Earnings history data unavailable.")
+except:
+    st.write("Earnings history data unavailable.")
+
+st.divider()
+
+# --- 2. FUTURE & PAST (Remaining sections) ---
 c_fut, c_past = st.columns(2)
 with c_fut:
     st.header("2. Future Growth")
     st.metric("Analyst Growth Est.", f"{info.get('earningsGrowth', 0)*100:.1f}%")
-    st.write("Forecasted annual earnings growth.")
 with c_past:
     st.header("3. Past Performance")
     st.metric("ROE", f"{roe*100:.1f}%")
     st.metric("ROA", f"{info.get('returnOnAssets', 0)*100:.1f}%")
 
-# --- 4. HEALTH ---
 st.divider()
+
+# --- 4. HEALTH ---
 st.header("4. Financial Health")
 h1, h2 = st.columns([2, 1])
 with h1:
     cash = info.get('totalCash', 0)
-    debt = info.get('totalDebt', 0)
+    debt_total = info.get('totalDebt', 0)
     fig_h = go.Figure()
-    fig_h.add_trace(go.Bar(x=['Cash', 'Debt'], y=[cash, debt], marker_color=['#00d09c', '#ff6384'], text=[f"${cash/1e9:.1f}B", f"${debt/1e9:.1f}B"], textposition='auto'))
+    fig_h.add_trace(go.Bar(x=['Cash', 'Debt'], y=[cash, debt_total], marker_color=['#00d09c', '#ff6384'], text=[f"${cash/1e9:.1f}B", f"${debt_total/1e9:.1f}B"], textposition='auto'))
     fig_h.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), margin=dict(t=0, b=0, l=0, r=0), height=200)
     st.plotly_chart(fig_h, use_container_width=True)
 with h2:
-    de_ratio = info.get('debtToEquity', 0)
-    st.metric("Debt to Equity", f"{de_ratio:.1f}%")
-    if de_ratio > 100: st.error(f"⚠️ High Debt ({de_ratio:.0f}%)")
-    else: st.success(f"✅ Healthy Debt ({de_ratio:.0f}%)")
-    if cash > debt: st.caption("✅ Cash covers total debt.")
-    else: st.caption("⚠️ Debt exceeds total cash.")
+    st.metric("Debt to Equity", f"{de:.1f}%")
+    if de > 100: st.error(f"⚠️ High Debt")
+    else: st.success(f"✅ Healthy")
+
+st.divider()
 
 # --- 5. DIVIDEND ---
-st.divider()
 st.header("5. Dividend")
 d1, d2 = st.columns(2)
 with d1:
@@ -346,87 +408,43 @@ with d2:
 
 st.divider()
 
-# --- NEW: COMPANY NEWS ---
+# --- NEWS ---
 st.header(f"Latest News for {ticker}")
-
-# Helper function to safely extract data from different news formats
 def get_news_data(article):
-    # 1. Extract Title
     title = article.get('title')
-    if not title and 'content' in article:
-        title = article['content'].get('title')
-    if not title:
-        title = article.get('headline', 'No Title Available')
-        
-    # 2. Extract Link
+    if not title and 'content' in article: title = article['content'].get('title')
+    if not title: title = article.get('headline', 'No Title Available')
+    
     link = article.get('link')
-    if isinstance(link, dict):
-        link = link.get('url')
-        
+    if isinstance(link, dict): link = link.get('url')
     if not link and 'content' in article:
         link = article['content'].get('link') or article['content'].get('canonicalUrl')
-        if isinstance(link, dict):
-            link = link.get('url')
-            
-    if not link:
-        link = article.get('clickThroughUrl', 'https://finance.yahoo.com')
+        if isinstance(link, dict): link = link.get('url')
+    if not link: link = article.get('clickThroughUrl', 'https://finance.yahoo.com')
     
-    # 3. Extract Publisher
     publisher = "Unknown"
-    
-    # Priority A: 'provider' key
     if 'provider' in article:
         provider = article['provider']
-        if isinstance(provider, dict):
-            publisher = provider.get('displayName') or provider.get('title') or "Unknown"
-            
-    # Priority B: 'publisher' key
+        if isinstance(provider, dict): publisher = provider.get('displayName') or provider.get('title') or "Unknown"
     elif 'publisher' in article:
         pub = article['publisher']
-        if isinstance(pub, dict):
-            publisher = pub.get('title') or pub.get('name') or "Unknown"
-        else:
-            publisher = str(pub)
-            
-    # Priority C: Fallback to Domain Name (e.g. 'www.barrons.com' -> 'Barrons')
+        if isinstance(pub, dict): publisher = pub.get('title') or pub.get('name') or "Unknown"
+        else: publisher = str(pub)
+    
     if publisher == "Unknown" and link:
         try:
             domain = urlparse(link).netloc
-            # Remove www. and get the first part (e.g. bloomberg.com -> bloomberg)
             clean_domain = domain.replace('www.', '').split('.')[0]
-            if clean_domain:
-                publisher = clean_domain.capitalize()
-        except:
-            pass
-            
+            if clean_domain: publisher = clean_domain.capitalize()
+        except: pass
     return title, link, publisher, article.get('providerPublishTime', 0)
 
 news_list = stock.news
-
 if news_list:
-    for article in news_list[:5]: # Show top 5
+    for article in news_list[:5]:
         title, link, publisher, pub_time = get_news_data(article)
-        
-        # Convert timestamp
-        date_str = ""
-        if pub_time:
-            try:
-                date_str = datetime.fromtimestamp(pub_time).strftime('%Y-%m-%d %H:%M')
-            except:
-                date_str = ""
-        
-        # Clean UI: Only show the pipe "|" if we actually have a publisher name
-        if publisher and publisher != "Unknown":
-            meta_text = f"{publisher} | {date_str}"
-        else:
-            meta_text = date_str
-
-        st.markdown(f"""
-        <div class="news-card">
-            <a href="{link}" target="_blank" class="news-title">{title}</a><br>
-            <span class="news-meta">{meta_text}</span>
-        </div>
-        """, unsafe_allow_html=True)
+        date_str = datetime.fromtimestamp(pub_time).strftime('%Y-%m-%d %H:%M') if pub_time else ""
+        meta_text = f"{publisher} | {date_str}" if publisher and publisher != "Unknown" else date_str
+        st.markdown(f"""<div class="news-card"><a href="{link}" target="_blank" class="news-title">{title}</a><br><span class="news-meta">{meta_text}</span></div>""", unsafe_allow_html=True)
 else:
-    st.write("No recent news found via API.")
-
+    st.write("No recent news found.")
