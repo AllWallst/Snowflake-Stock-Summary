@@ -323,38 +323,43 @@ st.header(f"Latest News for {ticker}")
 
 # Helper function to safely extract data from different news formats
 def get_news_data(article):
-    # 1. Try standard keys
+    # 1. Extract Title
     title = article.get('title')
-    link = article.get('link')
-    
-    # FIX: Check if 'link' is actually a dictionary (Common yfinance issue)
-    if isinstance(link, dict):
-        link = link.get('url')
-    
-    # 2. If missing, try nested 'content' key (common in some API versions)
     if not title and 'content' in article:
         title = article['content'].get('title')
-        if not link: 
-            link = article['content'].get('link') or article['content'].get('canonicalUrl')
-            # Check if nested link is also a dict
-            if isinstance(link, dict):
-                link = link.get('url')
-        
-    # 3. If still missing, try 'headline' or 'clickThroughUrl'
     if not title:
-        title = article.get('headline')
+        title = article.get('headline', 'No Title Available')
+        
+    # 2. Extract Link
+    link = article.get('link')
+    if isinstance(link, dict): # Fix dictionary links
+        link = link.get('url')
+        
+    if not link and 'content' in article:
+        link = article['content'].get('link') or article['content'].get('canonicalUrl')
+        if isinstance(link, dict):
+            link = link.get('url')
+            
     if not link:
-        link = article.get('clickThroughUrl')
-        
-    # 4. Fallback
-    if not title: title = "No Title Available"
-    if not link: link = "https://finance.yahoo.com"
+        link = article.get('clickThroughUrl', 'https://finance.yahoo.com')
     
-    # Publisher (sometimes a string, sometimes a dict)
-    publisher = article.get('publisher', 'Unknown')
-    if isinstance(publisher, dict):
-        publisher = publisher.get('title') or publisher.get('name') or 'Unknown'
-        
+    # 3. Extract Publisher (The Fix)
+    publisher = "Unknown"
+    
+    # Case A: 'provider' key (Common in new API)
+    if 'provider' in article:
+        provider = article['provider']
+        if isinstance(provider, dict):
+            publisher = provider.get('displayName') or provider.get('title') or "Unknown"
+            
+    # Case B: 'publisher' key (Old API)
+    elif 'publisher' in article:
+        pub = article['publisher']
+        if isinstance(pub, dict):
+            publisher = pub.get('title') or pub.get('name') or "Unknown"
+        else:
+            publisher = str(pub)
+            
     return title, link, publisher, article.get('providerPublishTime', 0)
 
 news_list = stock.news
@@ -379,3 +384,4 @@ if news_list:
         """, unsafe_allow_html=True)
 else:
     st.write("No recent news found via API.")
+
