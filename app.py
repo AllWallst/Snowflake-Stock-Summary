@@ -54,11 +54,6 @@ ticker = st.query_params["ticker"]
 # --- FETCH DATA (Rest of your code remains exactly the same below) ---
 try:
     stock = yf.Ticker(ticker)
-    # ... keep the rest of your existing code here ...
-
-# --- FETCH DATA ---
-try:
-    stock = yf.Ticker(ticker)
     info = stock.info
     
     # Check validity
@@ -363,4 +358,5 @@ with div_col:
             paper_bgcolor='rgba(0,0,0,0)'
         )
         st.plotly_chart(fig_div, use_container_width=True)
+
 
