@@ -296,16 +296,41 @@ with h1:
     debt = info.get('totalDebt', 0)
     
     fig_h = go.Figure()
-    fig_h.add_trace(go.Bar(x=['Cash', 'Debt'], y=[cash, debt], marker_color=['#00d09c', '#ff6384'], 
-                           text=[f"${cash/1e9:.1f}B", f"${debt/1e9:.1f}B"], textposition='auto'))
-    fig_h.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'))
+    fig_h.add_trace(go.Bar(
+        x=['Cash', 'Debt'], 
+        y=[cash, debt], 
+        marker_color=['#00d09c', '#ff6384'], 
+        # Format the hover text to Billions
+        text=[f"${cash/1e9:.1f}B", f"${debt/1e9:.1f}B"], 
+        textposition='auto'
+    ))
+    fig_h.update_layout(
+        paper_bgcolor='rgba(0,0,0,0)', 
+        plot_bgcolor='rgba(0,0,0,0)', 
+        font=dict(color='white'),
+        margin=dict(t=0, b=0, l=0, r=0),
+        height=200
+    )
     st.plotly_chart(fig_h, use_container_width=True)
 
 with h2:
-    st.metric("Debt to Equity", f"{info.get('debtToEquity', 'N/A')}")
-    if cash > debt: st.success("✅ Cash covers Debt")
-    else: st.error("⚠️ Debt exceeds Cash")
-
+    # Get the raw value (e.g., 150.5)
+    de_ratio = info.get('debtToEquity', 0)
+    
+    # Display it with the % symbol
+    st.metric("Debt to Equity", f"{de_ratio:.1f}%")
+    
+    # Add a helpful text explanation
+    if de_ratio > 100:
+        st.error(f"⚠️ High Debt. Liabilities are {de_ratio:.0f}% of Equity.")
+    else:
+        st.success(f"✅ Healthy. Debt is only {de_ratio:.0f}% of Equity.")
+        
+    if cash > debt: 
+        st.caption("✅ Cash covers total debt.")
+    else: 
+        st.caption("⚠️ Debt exceeds total cash.")
+        
 # --- 5. DIVIDEND ---
 st.divider()
 st.header("5. Dividend")
@@ -314,3 +339,4 @@ with d1:
     st.metric("Yield", f"{info.get('dividendYield', 0)*100:.2f}%")
 with d2:
     st.metric("Payout Ratio", f"{info.get('payoutRatio', 0)*100:.0f}%")
+
