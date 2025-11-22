@@ -327,14 +327,24 @@ def get_news_data(article):
     title = article.get('title')
     link = article.get('link')
     
+    # FIX: Check if 'link' is actually a dictionary (Common yfinance issue)
+    if isinstance(link, dict):
+        link = link.get('url')
+    
     # 2. If missing, try nested 'content' key (common in some API versions)
     if not title and 'content' in article:
         title = article['content'].get('title')
-        if not link: link = article['content'].get('link') or article['content'].get('canonicalUrl')
+        if not link: 
+            link = article['content'].get('link') or article['content'].get('canonicalUrl')
+            # Check if nested link is also a dict
+            if isinstance(link, dict):
+                link = link.get('url')
         
-    # 3. If still missing, try 'headline'
+    # 3. If still missing, try 'headline' or 'clickThroughUrl'
     if not title:
         title = article.get('headline')
+    if not link:
+        link = article.get('clickThroughUrl')
         
     # 4. Fallback
     if not title: title = "No Title Available"
@@ -369,5 +379,3 @@ if news_list:
         """, unsafe_allow_html=True)
 else:
     st.write("No recent news found via API.")
-
-
