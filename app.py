@@ -6,7 +6,7 @@ import numpy as np
 from datetime import datetime, timedelta
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(layout="wide", page_title="Simply Clone", page_icon="❄️")
+st.set_page_config(layout="wide", page_title="MarketRadar", page_icon="📡")
 
 # --- CUSTOM CSS ---
 st.markdown("""
@@ -31,7 +31,7 @@ url_ticker = st.query_params["ticker"]
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.title("❄️ Simply Clone")
+    st.title("📡 MarketRadar")
     
     def update_url():
         st.query_params["ticker"] = st.session_state.ticker_input.upper()
@@ -339,3 +339,4 @@ if news_list:
         """, unsafe_allow_html=True)
 else:
     st.write("No recent news found via API.")
+
