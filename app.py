@@ -7,7 +7,7 @@ import numpy as np
 # --- PAGE CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="Simply Clone", page_icon="❄️")
 
-# Custom CSS for the "Simply Wall St" dark theme
+# --- CUSTOM CSS ---
 st.markdown("""
     <style>
     .stApp { background-color: #1b222d; color: white; }
@@ -19,14 +19,42 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# --- URL & STATE MANAGEMENT ---
+# 1. Read the URL to see if a ticker is already there (e.g. ?ticker=GOOGL)
+if "ticker" not in st.query_params:
+    st.query_params["ticker"] = "AAPL" # Default if empty
+
+url_ticker = st.query_params["ticker"]
+
 # --- SIDEBAR ---
 with st.sidebar:
     st.title("❄️ Simply Clone")
-    ticker_input = st.text_input("Enter Ticker", value="AAPL").upper()
-    if st.button("Analyze"):
-        st.session_state.ticker = ticker_input
+    
+    # 2. Define a function that updates the URL when you type
+    def update_url():
+        # Get value from input, uppercase it, save to URL
+        st.query_params["ticker"] = st.session_state.ticker_input.upper()
 
-ticker = st.session_state.get("ticker", "AAPL")
+    # 3. The Input Box
+    # We bind this to 'update_url' so it runs immediately when you hit Enter
+    st.text_input(
+        "Enter Ticker", 
+        value=url_ticker, 
+        key="ticker_input", 
+        on_change=update_url
+    )
+    
+    # Button acts as a backup trigger
+    if st.button("Analyze"):
+        update_url()
+
+# 4. Set the variable for the rest of the app
+ticker = st.query_params["ticker"]
+
+# --- FETCH DATA (Rest of your code remains exactly the same below) ---
+try:
+    stock = yf.Ticker(ticker)
+    # ... keep the rest of your existing code here ...
 
 # --- FETCH DATA ---
 try:
@@ -335,3 +363,4 @@ with div_col:
             paper_bgcolor='rgba(0,0,0,0)'
         )
         st.plotly_chart(fig_div, use_container_width=True)
+
