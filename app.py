@@ -16,13 +16,13 @@ st.markdown("""
     div[data-testid="stMetricLabel"] { color: #8c97a7 !important; }
     .css-1d391kg { background-color: #232b36; border-radius: 15px; padding: 20px; }
     hr { border-color: #36404e; }
+    .stSelectbox label { color: #8c97a7; }
     </style>
 """, unsafe_allow_html=True)
 
 # --- URL & STATE MANAGEMENT ---
-# 1. Read the URL to see if a ticker is already there (e.g. ?ticker=GOOGL)
 if "ticker" not in st.query_params:
-    st.query_params["ticker"] = "AAPL" # Default if empty
+    st.query_params["ticker"] = "AAPL"
 
 url_ticker = st.query_params["ticker"]
 
@@ -30,111 +30,130 @@ url_ticker = st.query_params["ticker"]
 with st.sidebar:
     st.title("❄️ Simply Clone")
     
-    # 2. Define a function that updates the URL when you type
     def update_url():
-        # Get value from input, uppercase it, save to URL
         st.query_params["ticker"] = st.session_state.ticker_input.upper()
 
-    # 3. The Input Box
-    # We bind this to 'update_url' so it runs immediately when you hit Enter
-    st.text_input(
-        "Enter Ticker", 
-        value=url_ticker, 
-        key="ticker_input", 
-        on_change=update_url
-    )
-    
-    # Button acts as a backup trigger
+    st.text_input("Enter Ticker", value=url_ticker, key="ticker_input", on_change=update_url)
     if st.button("Analyze"):
         update_url()
+    
+    st.divider()
+    st.markdown("### ⚙️ Valuation Settings")
+    val_method = st.radio("Select Valuation Method", ["Discounted Cash Flow (DCF)", "Graham Formula", "Analyst Target"])
 
-# 4. Set the variable for the rest of the app
 ticker = st.query_params["ticker"]
 
-# --- FETCH DATA (Rest of your code remains exactly the same below) ---
+# --- FETCH DATA ---
 try:
     stock = yf.Ticker(ticker)
     info = stock.info
-    
-    # Check validity
     current_price = info.get('currentPrice') or info.get('regularMarketPrice')
+    
     if not current_price:
-        st.error("Ticker not found or data unavailable. Try a US stock like AAPL or MSFT.")
+        st.error("Ticker not found. Try a US stock like AAPL, MSFT, or GOOGL.")
         st.stop()
         
 except Exception as e:
     st.error(f"Error fetching data: {e}")
     st.stop()
 
-# --- DATA CLEANING & MANUAL CALCULATIONS ---
-# yfinance often returns None for PEG/ROE, so we calculate manually if needed
+# --- CALCULATION FUNCTIONS ---
 
-# 1. Get/Calculate ROE
-roe = info.get('returnOnEquity')
-if roe is None:
-    # Try calculating: Net Income / Total Equity
+# 1. GRAHAM NUMBER
+def calc_graham(info):
+    eps = info.get('trailingEps', 0)
+    bv = info.get('bookValue', 0)
+    if eps > 0 and bv > 0:
+        return np.sqrt(22.5 * eps * bv)
+    return 0
+
+# 2. DISCOUNTED CASH FLOW (2-Stage)
+def calc_dcf(stock, info):
     try:
-        bs = stock.balance_sheet
-        inc = stock.financials
-        if not bs.empty and not inc.empty:
-            total_equity = bs.loc['Stockholders Equity'].iloc[0]
-            net_income = inc.loc['Net Income'].iloc[0]
-            roe = net_income / total_equity
+        # Get Free Cash Flow (FCF)
+        cashflow = stock.cash_flow
+        if 'Free Cash Flow' in cashflow.index:
+            fcf_latest = cashflow.loc['Free Cash Flow'].iloc[0]
         else:
-            roe = 0
+            # Fallback: Operating Cash Flow - CapEx
+            ocf = cashflow.loc['Total Cash From Operating Activities'].iloc[0]
+            capex = cashflow.loc['Capital Expenditures'].iloc[0]
+            fcf_latest = ocf + capex # Capex is usually negative
+            
+        # Assumptions
+        growth_rate = info.get('earningsGrowth', 0.10) # Default 10% if missing
+        if growth_rate is None: growth_rate = 0.08
+        
+        # Cap unrealistic growth for safety (Simply Wall St does this too)
+        growth_rate = min(growth_rate, 0.20) 
+        
+        discount_rate = 0.09  # 9% WACC (Standard assumption)
+        terminal_growth = 0.025 # 2.5% (Inflation)
+        shares = info.get('sharesOutstanding', 1)
+        
+        # Projection (5 Years)
+        future_cash_flows = []
+        for i in range(1, 6):
+            fcf_val = fcf_latest * ((1 + growth_rate) ** i)
+            discounted_val = fcf_val / ((1 + discount_rate) ** i)
+            future_cash_flows.append(discounted_val)
+            
+        # Terminal Value
+        last_fcf = fcf_latest * ((1 + growth_rate) ** 5)
+        terminal_val = (last_fcf * (1 + terminal_growth)) / (discount_rate - terminal_growth)
+        discounted_terminal_val = terminal_val / ((1 + discount_rate) ** 5)
+        
+        total_value = sum(future_cash_flows) + discounted_terminal_val
+        dcf_fair_value = total_value / shares
+        
+        return dcf_fair_value, growth_rate
     except:
-        roe = 0
+        return 0, 0
 
-# 2. Get/Calculate PEG
-peg = info.get('pegRatio')
-pe_ratio = info.get('trailingPE')
-growth_est = info.get('earningsGrowth') # approx proxy
-if peg is None and pe_ratio and growth_est:
-    # PEG = PE / (Growth Rate * 100)
-    try:
-        peg = pe_ratio / (growth_est * 100)
-    except:
-        peg = 0
-elif peg is None:
-    peg = 0
+# --- RUN CALCULATIONS ---
+graham_fv = calc_graham(info)
+dcf_fv, dcf_growth = calc_dcf(stock, info)
+analyst_fv = info.get('targetMeanPrice', 0)
 
-# 3. Calculate "Fair Value" (Graham Number Proxy)
-# Simply Wall St uses DCF. We will use Graham Number (Sqrt(22.5 * EPS * BookVal)) 
-# or Analyst Target as a fallback for the visual.
-eps = info.get('trailingEps')
-book_val = info.get('bookValue')
+# Decide which to use based on Sidebar selection
+if val_method == "Discounted Cash Flow (DCF)":
+    fair_value = dcf_fv
+    calc_desc = f"2-Stage DCF Model (Growth: {dcf_growth*100:.1f}%, Discount: 9%)"
+elif val_method == "Graham Formula":
+    fair_value = graham_fv
+    calc_desc = "Graham Number (Sqrt(22.5 * EPS * Book Value))"
+else:
+    fair_value = analyst_fv
+    calc_desc = "Average Analyst Price Target"
 
-fair_value = 0
-fv_method = "Analyst Target"
-
-# Try Graham Number first (Classic Value Formula)
-if eps and book_val and eps > 0 and book_val > 0:
-    fair_value = np.sqrt(22.5 * eps * book_val)
-    fv_method = "Graham Formula"
-    
-# If Graham fails (negative earnings), use Analyst Target
+# Fallback if calculation fails (returns 0)
 if fair_value == 0 or np.isnan(fair_value):
-    fair_value = info.get('targetMeanPrice', current_price)
-    fv_method = "Analyst Target"
+    fair_value = current_price
+    calc_desc = "Data insufficient for calculation (Market Price used)"
 
-# --- SNOWFLAKE SCORE CALC ---
+# --- SNOWFLAKE SCORING (Updated with new data) ---
 scores = {"Value": 0, "Future": 0, "Past": 0, "Health": 0, "Dividend": 0}
 
-# Value
-if pe_ratio:
-    if pe_ratio < 15: scores["Value"] = 5
-    elif pe_ratio < 30: scores["Value"] = 3
-    else: scores["Value"] = 1
+# Value (Using the selected Fair Value)
+diff_percent = (fair_value - current_price) / current_price
+if diff_percent > 0.20: scores["Value"] = 5    # >20% Undervalued
+elif diff_percent > 0: scores["Value"] = 4     # Slightly Undervalued
+elif diff_percent > -0.20: scores["Value"] = 3 # Fair
+else: scores["Value"] = 1                      # Overvalued
 
 # Future (PEG)
+peg = info.get('pegRatio')
+if peg is None:
+    try: peg = info['trailingPE'] / (info['earningsGrowth']*100)
+    except: peg = 0
 if peg > 0 and peg < 1.5: scores["Future"] = 5
-elif peg > 0 and peg < 3.0: scores["Future"] = 3
-elif peg > 0: scores["Future"] = 2
-else: scores["Future"] = 1 # Negative or N/A
+elif peg > 0 and peg < 3: scores["Future"] = 3
+else: scores["Future"] = 2
 
 # Past (ROE)
-if roe > 0.20: scores["Past"] = 5
-elif roe > 0.10: scores["Past"] = 3
+roe = info.get('returnOnEquity', 0)
+if roe > 0.2: scores["Past"] = 5
+elif roe > 0.1: scores["Past"] = 3
 else: scores["Past"] = 1
 
 # Health (Debt/Equity)
@@ -148,20 +167,24 @@ dy = info.get('dividendYield', 0)
 if dy and dy > 0.02: scores["Dividend"] = 5
 elif dy: scores["Dividend"] = 3
 
-# --- LAYOUT START ---
+# --- MAIN UI LAYOUT ---
 
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    st.title(f"{info.get('shortName', ticker)}")
+    # Ticker with Link Icon style
+    st.markdown(f"""
+        <h1>{info.get('shortName', ticker)} <a href="https://finance.yahoo.com/quote/{ticker}" target="_blank" style="text-decoration:none; font-size:0.5em;">🔗</a></h1>
+        """, unsafe_allow_html=True)
+    
     st.caption(f"{info.get('sector', 'Unknown')} | {info.get('industry', 'Unknown')}")
-    st.write(info.get('longBusinessSummary', '')[:350] + "...")
+    st.write(info.get('longBusinessSummary', '')[:400] + "...")
     
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Price", f"${current_price:.2f}")
     m2.metric("Market Cap", f"${(info.get('marketCap',0)/1e9):.1f}B")
     m3.metric("Beta", f"{info.get('beta', 0):.2f}")
-    m4.metric("PE Ratio", f"{pe_ratio:.1f}" if pe_ratio else "N/A")
+    m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
 
 with col2:
     # Snowflake Chart
@@ -177,186 +200,117 @@ with col2:
         paper_bgcolor='rgba(0,0,0,0)',
         margin=dict(t=20, b=20, l=20, r=20),
         showlegend=False,
-        height=250
+        height=280
     )
     st.plotly_chart(fig, use_container_width=True)
 
 st.divider()
 
-# --- 1. VALUATION (WITH NEW VISUAL) ---
+# --- 1. VALUATION SECTION ---
 st.header("1. Valuation")
 
-# Create the "Share Price vs Fair Value" Chart
-val_col1, val_col2 = st.columns([2,1])
+v_col_left, v_col_right = st.columns([2, 1])
 
-with val_col1:
+with v_col_left:
     st.subheader("Share Price vs Fair Value")
     
-    # Logic for Undervalued/Overvalued text
+    # Valuation Status Logic
     diff = ((current_price - fair_value) / fair_value) * 100
-    status = "Overvalued" if diff > 0 else "Undervalued"
-    color_status = "#ff6384" if diff > 0 else "#00d09c" # Red or Green
+    status_color = "#ff6384" if diff > 20 else "#ffce56" if diff > -20 else "#00d09c"
+    status_text = "Overvalued" if diff > 0 else "Undervalued"
     
     st.markdown(f"""
     The stock is trading at **${current_price}**. Our estimated Fair Value is **${fair_value:.2f}**.
-    It appears to be <span style="color:{color_status}; font-weight:bold;">{abs(diff):.1f}% {status}</span>.
-    <small>(Calculation Method: {fv_method})</small>
+    It appears to be <span style="color:{status_color}; font-weight:bold;">{abs(diff):.1f}% {status_text}</span>.
+    <br><small style="color:#8c97a7">Calculation Method: {calc_desc}</small>
     """, unsafe_allow_html=True)
-
-    # BUILD THE CUSTOM VISUAL
-    max_range = max(current_price, fair_value) * 1.4
     
-    fig_fv = go.Figure()
+    # --- CUSTOM BAR VISUAL ---
+    max_val = max(current_price, fair_value) * 1.3
+    fig_val = go.Figure()
 
-    # 1. Background Zones (Green/Yellow/Red)
-    # 20% Undervalued Zone
-    fig_fv.add_vrect(x0=0, x1=fair_value * 0.8, fillcolor="#00d09c", opacity=0.2, layer="below", line_width=0)
-    # Fair Zone
-    fig_fv.add_vrect(x0=fair_value * 0.8, x1=fair_value * 1.2, fillcolor="#ffce56", opacity=0.2, layer="below", line_width=0)
-    # Overvalued Zone
-    fig_fv.add_vrect(x0=fair_value * 1.2, x1=max_range * 1.5, fillcolor="#ff6384", opacity=0.2, layer="below", line_width=0)
+    # Zones
+    fig_val.add_vrect(x0=0, x1=fair_value*0.8, fillcolor="#00d09c", opacity=0.15, layer="below", line_width=0)
+    fig_val.add_vrect(x0=fair_value*0.8, x1=fair_value*1.2, fillcolor="#ffce56", opacity=0.15, layer="below", line_width=0)
+    fig_val.add_vrect(x0=fair_value*1.2, x1=max_val*1.5, fillcolor="#ff6384", opacity=0.15, layer="below", line_width=0)
 
-    # 2. Bar for Current Price
-    fig_fv.add_trace(go.Bar(
-        y=["Price"], x=[current_price], 
-        name="Current Price", orientation='h',
-        marker_color='#1f77b4', # Simply Wall St Blue
+    # Current Price Bar
+    fig_val.add_trace(go.Bar(
+        y=[""], x=[current_price], name="Current Price", orientation='h',
+        marker_color='#36a2eb', width=0.3,
         text=f"Current: ${current_price}", textposition='auto'
     ))
 
-    # 3. Bar for Fair Value
-    fig_fv.add_trace(go.Bar(
-        y=["Value"], x=[fair_value], 
-        name="Fair Value", orientation='h',
-        marker_color='#232b36', # Dark bar
-        marker_line_color='white', marker_line_width=2,
+    # Fair Value Bar
+    fig_val.add_trace(go.Bar(
+        y=[""], x=[fair_value], name="Fair Value", orientation='h',
+        marker_color='#232b36', marker_line_color='white', marker_line_width=2, width=0.3,
         text=f"Fair Value: ${fair_value:.2f}", textposition='auto'
     ))
 
-    fig_fv.update_layout(
+    fig_val.update_layout(
+        xaxis=dict(range=[0, max_val], visible=False),
+        yaxis=dict(visible=False),
         barmode='group',
-        xaxis=dict(range=[0, max_range], showgrid=False, visible=False),
-        yaxis=dict(showgrid=False, showticklabels=False), # Hide labels, bars explain themselves
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(0,0,0,0)',
-        margin=dict(t=20, b=20, l=0, r=0),
-        height=180,
+        height=150,
+        margin=dict(t=0, b=0, l=0, r=0),
         showlegend=False
     )
+    st.plotly_chart(fig_val, use_container_width=True)
     
-    st.plotly_chart(fig_fv, use_container_width=True)
-    
-    # Legend for the zones
     st.caption("🟩 Undervalued (<20%) | 🟨 Fair Value | 🟥 Overvalued (>20%)")
 
-with val_col2:
-    st.metric("P/E Ratio", f"{pe_ratio:.1f}" if pe_ratio else "N/A")
-    st.metric("PEG Ratio", f"{peg:.2f}" if peg else "N/A", delta_color="inverse")
-    st.metric("Fair Value", f"${fair_value:.2f}")
+with v_col_right:
+    # Key Valuation Metrics
+    st.metric("P/E Ratio", f"{info.get('trailingPE', 0):.1f}")
+    st.metric("PEG Ratio", f"{peg:.2f}" if peg else "N/A")
+    if graham_fv > 0:
+        st.metric("Graham Number", f"${graham_fv:.2f}", help="Sqrt(22.5 * EPS * BookValue)")
+    else:
+        st.metric("Graham Number", "N/A")
 
 st.divider()
 
 # --- 2. FUTURE & PAST ---
-col_fut, col_past = st.columns(2)
+c_fut, c_past = st.columns(2)
 
-with col_fut:
+with c_fut:
     st.header("2. Future Growth")
-    # Fix: PEG N/A Issue - Handled in calculation section above
-    st.metric("PEG Ratio", f"{peg:.2f}" if peg else "N/A")
-    if peg and peg < 1:
-        st.success("PEG < 1: Stock is potentially undervalued based on growth.")
-    elif peg:
-        st.warning("PEG > 1: Stock price assumes high growth.")
-        
     st.metric("Analyst Growth Est.", f"{info.get('earningsGrowth', 0)*100:.1f}%")
+    st.write("Forecasted annual earnings growth.")
 
-with col_past:
+with c_past:
     st.header("3. Past Performance")
-    # Fix: ROE Missing - Handled in calculation section above
-    st.metric("Return on Equity (ROE)", f"{roe*100:.1f}%")
-    if roe > 0.20:
-        st.success("High ROE (>20%) indicates efficient management.")
-        
-    st.metric("Return on Assets (ROA)", f"{info.get('returnOnAssets', 0)*100:.1f}%")
+    st.metric("ROE", f"{roe*100:.1f}%")
+    st.metric("ROA", f"{info.get('returnOnAssets', 0)*100:.1f}%")
 
-# --- 4. FINANCIAL HEALTH CHART ---
+# --- 4. HEALTH ---
 st.divider()
 st.header("4. Financial Health")
-st.subheader("Debt vs Equity")
+h1, h2 = st.columns([2, 1])
 
-h_chart_col, h_data_col = st.columns([2,1])
-
-with h_chart_col:
-    # Create Debt/Equity Bar Chart
-    total_debt = info.get('totalDebt', 0)
-    total_cash = info.get('totalCash', 0)
+with h1:
+    cash = info.get('totalCash', 0)
+    debt = info.get('totalDebt', 0)
     
-    # Handle case where debt/equity might be missing from info
-    # using balance sheet fallback
-    if not total_debt:
-        try: total_debt = stock.balance_sheet.loc['Total Debt'].iloc[0]
-        except: total_debt = 0
-        
-    # Visualize
-    fig_health = go.Figure()
-    fig_health.add_trace(go.Bar(
-        x=['Cash', 'Debt'],
-        y=[total_cash, total_debt],
-        marker_color=['#00d09c', '#ff6384'],
-        text=[f"${total_cash/1e9:.1f}B", f"${total_debt/1e9:.1f}B"],
-        textposition='auto'
-    ))
-    fig_health.update_layout(
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        yaxis=dict(showgrid=True, gridcolor='#36404e'),
-        font=dict(color='white')
-    )
-    st.plotly_chart(fig_health, use_container_width=True)
+    fig_h = go.Figure()
+    fig_h.add_trace(go.Bar(x=['Cash', 'Debt'], y=[cash, debt], marker_color=['#00d09c', '#ff6384'], 
+                           text=[f"${cash/1e9:.1f}B", f"${debt/1e9:.1f}B"], textposition='auto'))
+    fig_h.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'))
+    st.plotly_chart(fig_h, use_container_width=True)
 
-with h_data_col:
+with h2:
     st.metric("Debt to Equity", f"{info.get('debtToEquity', 'N/A')}")
-    if total_cash > total_debt:
-        st.success("✅ More Cash than Debt")
-    else:
-        st.error("⚠️ More Debt than Cash")
+    if cash > debt: st.success("✅ Cash covers Debt")
+    else: st.error("⚠️ Debt exceeds Cash")
 
+# --- 5. DIVIDEND ---
 st.divider()
-
-# --- 5. MANAGEMENT & DIVIDENDS ---
-mgt_col, div_col = st.columns(2)
-
-with mgt_col:
-    st.header("Management")
-    officers = info.get('companyOfficers', [])
-    if officers:
-        st.write(f"**CEO:** {officers[0].get('name', 'N/A')}")
-        st.write(f"**Pay:** ${officers[0].get('totalPay', 0):,}" if officers[0].get('totalPay') else "N/A")
-    else:
-        st.write("Data unavailable")
-
-with div_col:
-    st.header("Dividend")
-    yield_val = info.get('dividendYield', 0)
-    payout = info.get('payoutRatio', 0)
-    
-    st.metric("Yield", f"{yield_val*100:.2f}%" if yield_val else "0%")
-    st.metric("Payout Ratio", f"{payout*100:.0f}%" if payout else "N/A")
-    
-    # Donut chart for payout
-    if payout:
-        fig_div = go.Figure(data=[go.Pie(
-            labels=['Payout', 'Retained'], 
-            values=[payout, 1-payout], 
-            hole=.7,
-            marker=dict(colors=['#00d09c', '#2c3542'])
-        )])
-        fig_div.update_layout(
-            showlegend=False, 
-            height=150, 
-            margin=dict(t=0,b=0,l=0,r=0),
-            paper_bgcolor='rgba(0,0,0,0)'
-        )
-        st.plotly_chart(fig_div, use_container_width=True)
-
-
+st.header("5. Dividend")
+d1, d2 = st.columns(2)
+with d1:
+    st.metric("Yield", f"{info.get('dividendYield', 0)*100:.2f}%")
+with d2:
+    st.metric("Payout Ratio", f"{info.get('payoutRatio', 0)*100:.0f}%")
