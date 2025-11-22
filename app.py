@@ -190,10 +190,44 @@ st.divider()
 
 # --- INTERACTIVE PRICE HISTORY CHART ---
 st.header("Price History")
-# Fetch historical data (Max period to support all zooms)
-# Note: yfinance "max" is daily data.
-hist_data = stock.history(period="max")
 
+# Add a Toggle to switch between Long Term (Daily) and Short Term (Intraday)
+chart_type = st.radio(
+    "Select Timeframe:", 
+    ["Long Term (Daily)", "Short Term (Intraday)"], 
+    horizontal=True,
+    label_visibility="collapsed" # Hides the label for a cleaner look
+)
+
+# Logic to fetch data based on selection
+if chart_type == "Short Term (Intraday)":
+    # Fetch 5 days of 15-minute data
+    hist_data = stock.history(period="5d", interval="15m")
+    
+    # Define buttons for Intraday
+    buttons = list([
+        dict(count=1, label="1d", step="day", stepmode="backward"),
+        dict(count=5, label="5d", step="day", stepmode="backward"),
+        dict(step="all", label="Show All")
+    ])
+    line_color = '#36a2eb' # Blue for short term
+    
+else:
+    # Fetch Max history of Daily data
+    hist_data = stock.history(period="max", interval="1d")
+    
+    # Define buttons for Daily
+    buttons = list([
+        dict(count=1, label="1m", step="month", stepmode="backward"),
+        dict(count=6, label="6m", step="month", stepmode="backward"),
+        dict(count=1, label="YTD", step="year", stepmode="todate"),
+        dict(count=1, label="1y", step="year", stepmode="backward"),
+        dict(count=5, label="5y", step="year", stepmode="backward"),
+        dict(step="all", label="MAX")
+    ])
+    line_color = '#00d09c' # Green for long term
+
+# Render the Chart
 if not hist_data.empty:
     fig_price = go.Figure()
     
@@ -203,25 +237,18 @@ if not hist_data.empty:
         y=hist_data['Close'],
         mode='lines',
         name='Close Price',
-        line=dict(color='#00d09c', width=2),
-        fill='tozeroy', # Area chart style
-        fillcolor='rgba(0, 208, 156, 0.1)' 
+        line=dict(color=line_color, width=2),
+        fill='tozeroy', 
+        fillcolor=f"rgba({int(line_color[1:3], 16)}, {int(line_color[3:5], 16)}, {int(line_color[5:7], 16)}, 0.1)"
     ))
 
     # Range Selector Buttons
     fig_price.update_xaxes(
-        rangeslider_visible=True, # The slider at the bottom
+        rangeslider_visible=True,
         rangeselector=dict(
-            buttons=list([
-                dict(count=1, label="1m", step="month", stepmode="backward"),
-                dict(count=6, label="6m", step="month", stepmode="backward"),
-                dict(count=1, label="YTD", step="year", stepmode="todate"),
-                dict(count=1, label="1y", step="year", stepmode="backward"),
-                dict(count=5, label="5y", step="year", stepmode="backward"),
-                dict(step="all", label="MAX")
-            ]),
+            buttons=buttons,
             bgcolor="#2c3542",
-            activecolor="#00d09c",
+            activecolor=line_color,
             font=dict(color="white")
         )
     )
@@ -402,3 +429,4 @@ if news_list:
         """, unsafe_allow_html=True)
 else:
     st.write("No recent news found via API.")
+
