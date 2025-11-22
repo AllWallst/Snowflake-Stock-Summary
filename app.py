@@ -320,16 +320,46 @@ st.divider()
 
 # --- NEW: COMPANY NEWS ---
 st.header(f"Latest News for {ticker}")
+
+# Helper function to safely extract data from different news formats
+def get_news_data(article):
+    # 1. Try standard keys
+    title = article.get('title')
+    link = article.get('link')
+    
+    # 2. If missing, try nested 'content' key (common in some API versions)
+    if not title and 'content' in article:
+        title = article['content'].get('title')
+        if not link: link = article['content'].get('link') or article['content'].get('canonicalUrl')
+        
+    # 3. If still missing, try 'headline'
+    if not title:
+        title = article.get('headline')
+        
+    # 4. Fallback
+    if not title: title = "No Title Available"
+    if not link: link = "https://finance.yahoo.com"
+    
+    # Publisher (sometimes a string, sometimes a dict)
+    publisher = article.get('publisher', 'Unknown')
+    if isinstance(publisher, dict):
+        publisher = publisher.get('title') or publisher.get('name') or 'Unknown'
+        
+    return title, link, publisher, article.get('providerPublishTime', 0)
+
 news_list = stock.news
 
 if news_list:
     for article in news_list[:5]: # Show top 5
-        title = article.get('title', 'No Title')
-        link = article.get('link', '#')
-        publisher = article.get('publisher', 'Unknown')
+        title, link, publisher, pub_time = get_news_data(article)
+        
         # Convert timestamp
-        pub_time = article.get('providerPublishTime', 0)
-        date_str = datetime.fromtimestamp(pub_time).strftime('%Y-%m-%d %H:%M') if pub_time else ""
+        date_str = ""
+        if pub_time:
+            try:
+                date_str = datetime.fromtimestamp(pub_time).strftime('%Y-%m-%d %H:%M')
+            except:
+                date_str = ""
         
         st.markdown(f"""
         <div class="news-card">
@@ -339,4 +369,5 @@ if news_list:
         """, unsafe_allow_html=True)
 else:
     st.write("No recent news found via API.")
+
 
