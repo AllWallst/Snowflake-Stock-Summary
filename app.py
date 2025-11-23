@@ -41,6 +41,11 @@ st.markdown("""
     .pos { color: #00d09c; }
     .neg { color: #ff6384; }
     
+    /* Checklist Styles */
+    .check-item { margin-bottom: 8px; font-size: 0.9rem; }
+    .check-pass { color: #00d09c; margin-right: 8px; }
+    .check-fail { color: #ff6384; margin-right: 8px; }
+    
     @media (max-width: 800px) {
         .perf-container { grid-template-columns: repeat(4, 1fr); gap: 15px; }
     }
@@ -175,53 +180,59 @@ if fair_value == 0 or np.isnan(fair_value):
     fair_value = current_price
     calc_desc = "Data insufficient (Market Price used)"
 
+# --- SCORING HELPER ---
+def check(condition, text):
+    if condition: return 1, f"✅ {text}"
+    else: return 0, f"❌ {text}"
+
 # --- 6-POINT CHECKLIST SCORING ENGINE ---
 
 # 1. VALUATION (6 Points)
 v_score = 0
-if current_price < fair_value: v_score += 1        # 1. Below Fair Value
-if current_price < fair_value * 0.8: v_score += 1  # 2. Significantly Below
-if info.get('trailingPE', 99) < 25: v_score += 1   # 3. PE vs Market
-if info.get('trailingPE', 99) < 35: v_score += 1   # 4. PE vs Peers
-if peg > 0 and peg < 1.5: v_score += 1             # 5. PEG Ratio
-if current_price < analyst_fv: v_score += 1        # 6. Analyst Forecast
+v_details = []
+s, t = check(current_price < fair_value, "Below Fair Value"); v_score+=s; v_details.append(t)
+s, t = check(current_price < fair_value * 0.8, "Significantly Below Fair Value (>20%)"); v_score+=s; v_details.append(t)
+s, t = check(info.get('trailingPE', 99) < 25, "P/E vs Market Ratio (< 25x)"); v_score+=s; v_details.append(t)
+s, t = check(info.get('trailingPE', 99) < 35, "P/E vs Peers Average (< 35x)"); v_score+=s; v_details.append(t)
+s, t = check(peg > 0 and peg < 1.5, "PEG Ratio within reasonable range (< 1.5x)"); v_score+=s; v_details.append(t)
+s, t = check(current_price < analyst_fv, "Below Analyst Price Target"); v_score+=s; v_details.append(t)
 
 # 2. FUTURE GROWTH (6 Points)
 f_score = 0
+f_details = []
 g_rate = info.get('earningsGrowth', 0)
 rev_g = info.get('revenueGrowth', 0)
-if g_rate > 0.02: f_score += 1   # 1. vs Savings Rate
-if g_rate > 0.10: f_score += 1   # 2. vs Market
-if g_rate > 0.20: f_score += 1   # 3. High Growth Earnings
-if rev_g > 0.10: f_score += 1    # 4. vs Market Revenue
-if rev_g > 0.20: f_score += 1    # 5. High Growth Revenue
-if roe > 0.20: f_score += 1      # 6. Future ROE
+s, t = check(g_rate > 0.02, "Earnings Growth > Savings Rate (2%)"); f_score+=s; f_details.append(t)
+s, t = check(g_rate > 0.10, "Earnings Growth > Market Avg (10%)"); f_score+=s; f_details.append(t)
+s, t = check(g_rate > 0.20, "High Growth Earnings (> 20%)"); f_score+=s; f_details.append(t)
+s, t = check(rev_g > 0.10, "Revenue Growth > Market Avg (10%)"); f_score+=s; f_details.append(t)
+s, t = check(rev_g > 0.20, "High Growth Revenue (> 20%)"); f_score+=s; f_details.append(t)
+s, t = check(roe > 0.20, "High Future ROE (> 20%)"); f_score+=s; f_details.append(t)
 
 # 3. PAST PERFORMANCE (6 Points)
 p_score = 0
+p_details = []
 try:
     ni = financials['Net Income'].iloc[0] if not financials.empty else 0
     ocf = cash_flow['Total Cash From Operating Activities'].iloc[0] if not cash_flow.empty else 0
-    # 1. Quality Earnings
-    if ocf > ni: p_score += 1 
-    # 2. Growing Profit Margin
+    s, t = check(ocf > ni, "High Quality Earnings (Cash Flow > Net Income)"); p_score+=s; p_details.append(t)
+    
     curr_rev = financials['Total Revenue'].iloc[0]
     prev_rev = financials['Total Revenue'].iloc[1]
     curr_ni = financials['Net Income'].iloc[0]
     prev_ni = financials['Net Income'].iloc[1]
-    if (curr_ni/curr_rev) > (prev_ni/prev_rev): p_score += 1
-    # 3. Earnings Trend (Current > Prev Year)
-    if curr_ni > prev_ni: p_score += 1
-    # 4. Accelerating Growth (Current > 3y avg - simplified to > 1.1x prev)
-    if curr_ni > prev_ni * 1.1: p_score += 1 
-except: pass
-# 5. Earnings vs Industry (Proxy via high growth)
-if g_rate > 0.10: p_score += 1
-# 6. High ROE
-if roe > 0.20: p_score += 1 
+    s, t = check((curr_ni/curr_rev) > (prev_ni/prev_rev), "Growing Profit Margin"); p_score+=s; p_details.append(t)
+    s, t = check(curr_ni > prev_ni, "Positive Earnings Trend (vs last year)"); p_score+=s; p_details.append(t)
+    s, t = check(curr_ni > prev_ni * 1.1, "Accelerating Growth (>10% gain)"); p_score+=s; p_details.append(t)
+except: 
+    p_details.append("❌ Insufficient Historical Data")
+
+s, t = check(g_rate > 0.10, "Earnings vs Industry"); p_score+=s; p_details.append(t)
+s, t = check(roe > 0.20, "High ROE (> 20%)"); p_score+=s; p_details.append(t)
 
 # 4. FINANCIAL HEALTH (6 Points)
 h_score = 0
+h_details = []
 try:
     curr_assets = balance_sheet['Current Assets'].iloc[0]
     curr_liab = balance_sheet['Current Liabilities'].iloc[0]
@@ -233,50 +244,57 @@ try:
     interest = abs(financials['Interest Expense'].iloc[0]) if 'Interest Expense' in financials.columns else 0
     ocf = cash_flow['Total Cash From Operating Activities'].iloc[0]
 
-    # 1. Short Term (Assets > Liab)
-    if curr_assets > curr_liab: h_score += 1 
-    # 2. Long Term (Assets > Long Term Liab)
-    if curr_assets > (total_liab - curr_liab): h_score += 1 
-    # 3. Debt Level (D/E < 40% OR Cash > Debt)
-    if (total_debt/equity < 0.40) or (cash_bs > total_debt): h_score += 1 
-    # 4. Reducing Debt
+    s, t = check(curr_assets > curr_liab, "Short Term Assets > Short Term Liabilities"); h_score+=s; h_details.append(t)
+    s, t = check(curr_assets > (total_liab - curr_liab), "Short Term Assets > Long Term Liabilities"); h_score+=s; h_details.append(t)
+    s, t = check((total_debt/equity < 0.40) or (cash_bs > total_debt), "Safe Debt Level (D/E < 40% or Cash > Debt)"); h_score+=s; h_details.append(t)
+    
     prev_debt = balance_sheet['Total Debt'].iloc[1]
     prev_eq = balance_sheet['Stockholders Equity'].iloc[1]
-    if (total_debt/equity) < (prev_debt/prev_eq): h_score += 1
-    # 5. Debt Coverage (OCF > 20% Debt)
-    if ocf > (total_debt * 0.2): h_score += 1
-    # 6. Interest Coverage (EBIT > 5x)
-    if interest == 0 or (ebit / interest > 5): h_score += 1
-except: h_score = 3 
+    s, t = check((total_debt/equity) < (prev_debt/prev_eq), "Reducing Debt (vs Last Year)"); h_score+=s; h_details.append(t)
+    s, t = check(ocf > (total_debt * 0.2), "Debt Coverage (Cash Flow > 20% Debt)"); h_score+=s; h_details.append(t)
+    s, t = check(interest == 0 or (ebit / interest > 5), "Interest Coverage (EBIT > 5x Interest)"); h_score+=s; h_details.append(t)
+except:
+    h_score = 3
+    h_details.append("❌ Balance Sheet Data Unavailable")
 
 # 5. DIVIDEND (6 Points)
 d_score = 0
-# 1. Notable Dividend (>1.5%)
-if dy > 0.015: d_score += 1
-# 2. High Dividend (>3.5%)
-if dy > 0.035: d_score += 1
-# 3. Stable (10y history of no drops) & 4. Growing (10y)
+d_details = []
+s, t = check(dy > 0.015, "Notable Dividend Yield (> 1.5%)"); d_score+=s; d_details.append(t)
+s, t = check(dy > 0.035, "High Dividend Yield (> 3.5%)"); d_score+=s; d_details.append(t)
+
+is_stable = False
+is_growing = False
 try:
-    if not div_history.empty and len(div_history) > 20: # Approx 5-10 years of quarters
-        # Simple check: is current > 5 years ago?
+    if not div_history.empty and len(div_history) > 20:
         curr_div = div_history.iloc[-1]
-        old_div = div_history.iloc[-20] # 5 years ago approx
-        if curr_div >= old_div: d_score += 1 # Stable proxy
-        if curr_div > old_div: d_score += 1 # Growing proxy
+        old_div = div_history.iloc[-20]
+        if curr_div >= old_div: is_stable = True
+        if curr_div > old_div: is_growing = True
 except: pass
-# 5. Earnings Coverage
-if info.get('payoutRatio', 1) < 0.90 and dy > 0: d_score += 1
-# 6. Cash Flow Coverage
+s, t = check(is_stable, "Stable Dividend (10 Year History)"); d_score+=s; d_details.append(t)
+s, t = check(is_growing, "Growing Dividend (10 Year History)"); d_score+=s; d_details.append(t)
+
+s, t = check(info.get('payoutRatio', 1) < 0.90 and dy > 0, "Earnings Coverage (Payout < 90%)"); d_score+=s; d_details.append(t)
+
+cf_cover = False
 try:
     div_paid = abs(cash_flow['Cash Dividends Paid'].iloc[0])
     fcf = cash_flow['Free Cash Flow'].iloc[0]
-    if div_paid < fcf and dy > 0: d_score += 1
+    if div_paid < fcf and dy > 0: cf_cover = True
 except: pass
+s, t = check(cf_cover, "Cash Flow Coverage (Divs < FCF)"); d_score+=s; d_details.append(t)
 
-# Final 6-Point Scores
-final_scores = [v_score, f_score, p_score, h_score, d_score]
+# Normalize to 5 for Chart
+final_scores = [
+    (v_score / 6) * 5,
+    (f_score / 6) * 5,
+    (p_score / 6) * 5,
+    (h_score / 6) * 5,
+    (d_score / 6) * 5
+]
 
-# Color Logic (Max 30 points total)
+# Color Logic
 total_raw_score = sum(final_scores)
 if total_raw_score < 12: flake_color = "#ff4b4b"
 elif total_raw_score < 20: flake_color = "#ffb300"
@@ -302,7 +320,7 @@ with col1:
     m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
 
 with col2:
-    # --- SNOWFLAKE CHART (0-6 SCALE) ---
+    # --- SNOWFLAKE CHART ---
     r_vals = final_scores + [final_scores[0]]
     theta_vals = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
     
@@ -314,7 +332,7 @@ with col2:
         line_color=flake_color,
         fillcolor=fill_rgba,
         hoverinfo='text',
-        text=[f"{s}/6" for s in r_vals],
+        text=[f"{s:.1f}/5" for s in r_vals],
         marker=dict(size=5)
     ))
     
@@ -322,7 +340,7 @@ with col2:
         polar=dict(
             radialaxis=dict(
                 visible=True,
-                range=[0, 6], # Updated Range
+                range=[0, 5],
                 showticklabels=False,
                 gridcolor='#444', 
                 gridwidth=1.5,
@@ -342,6 +360,26 @@ with col2:
         height=300
     )
     st.plotly_chart(fig, use_container_width=True)
+    
+    # --- ANALYSIS BREAKDOWN DROPDOWN ---
+    with st.expander("📊 See Analysis Breakdown"):
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Value", "Future", "Past", "Health", "Dividend"])
+        
+        with tab1:
+            st.write(f"**Valuation Score: {v_score}/6**")
+            for i in v_details: st.markdown(f"<div class='check-item'>{i}</div>", unsafe_allow_html=True)
+        with tab2:
+            st.write(f"**Future Growth Score: {f_score}/6**")
+            for i in f_details: st.markdown(f"<div class='check-item'>{i}</div>", unsafe_allow_html=True)
+        with tab3:
+            st.write(f"**Past Performance Score: {p_score}/6**")
+            for i in p_details: st.markdown(f"<div class='check-item'>{i}</div>", unsafe_allow_html=True)
+        with tab4:
+            st.write(f"**Financial Health Score: {h_score}/6**")
+            for i in h_details: st.markdown(f"<div class='check-item'>{i}</div>", unsafe_allow_html=True)
+        with tab5:
+            st.write(f"**Dividend Score: {d_score}/6**")
+            for i in d_details: st.markdown(f"<div class='check-item'>{i}</div>", unsafe_allow_html=True)
 
 st.divider()
 
