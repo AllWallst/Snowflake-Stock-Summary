@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from urllib.parse import urlparse
 
 # --- PAGE CONFIGURATION ---
@@ -22,10 +22,8 @@ st.markdown("""
     .news-card { background-color: #232b36; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 4px solid #00d09c; }
     .news-title { color: white; font-weight: bold; font-size: 1.1em; text-decoration: none; }
     .news-meta { color: #8c97a7; font-size: 0.85em; }
-    /* Search Box Fix */
     div[data-baseweb="select"] > div { background-color: #2c3542; color: white; border-color: #444; }
     
-    /* Performance Grid Styles */
     .perf-container {
         display: grid;
         grid-template-columns: repeat(8, 1fr);
@@ -230,13 +228,36 @@ st.header("Price History")
 # 1. GRAPH CONTROLS
 chart_type = st.radio("Select Timeframe:", ["Long Term (Daily)", "Short Term (Intraday)"], horizontal=True, label_visibility="collapsed")
 
+start_range = None
+end_range = None
+
 if chart_type == "Short Term (Intraday)":
-    hist_data = stock.history(period="5d", interval="15m")
-    buttons = list([dict(count=1, label="1d", step="day", stepmode="backward"), dict(count=5, label="5d", step="day", stepmode="backward"), dict(step="all", label="Show All")])
+    # Request prepost=True to get data outside 9:30-16:00 if available
+    hist_data = stock.history(period="5d", interval="15m", prepost=True)
+    
+    # Calculate Range for latest day (7:30 to 18:00)
+    if not hist_data.empty:
+        last_dt = hist_data.index[-1]
+        # Construct specific times for the latest date found in data
+        start_range = last_dt.replace(hour=7, minute=30, second=0, microsecond=0)
+        end_range = last_dt.replace(hour=18, minute=0, second=0, microsecond=0)
+
+    buttons = list([
+        dict(count=1, label="1d", step="day", stepmode="backward"),
+        dict(count=5, label="5d", step="day", stepmode="backward"),
+        dict(step="all", label="Show All")
+    ])
     line_color = '#36a2eb'
 else:
     hist_data = stock.history(period="max", interval="1d")
-    buttons = list([dict(count=1, label="1m", step="month", stepmode="backward"), dict(count=6, label="6m", step="month", stepmode="backward"), dict(count=1, label="YTD", step="year", stepmode="todate"), dict(count=1, label="1y", step="year", stepmode="backward"), dict(count=5, label="5y", step="year", stepmode="backward"), dict(step="all", label="MAX")])
+    buttons = list([
+        dict(count=1, label="1m", step="month", stepmode="backward"),
+        dict(count=6, label="6m", step="month", stepmode="backward"),
+        dict(count=1, label="YTD", step="year", stepmode="todate"),
+        dict(count=1, label="1y", step="year", stepmode="backward"),
+        dict(count=5, label="5y", step="year", stepmode="backward"),
+        dict(step="all", label="MAX")
+    ])
     line_color = '#00d09c'
 
 # 2. GRAPH RENDER (Interactive)
@@ -251,26 +272,31 @@ if not hist_data.empty:
         line=dict(color=line_color, width=2),
         fill='tozeroy',
         fillcolor=f"rgba({int(line_color[1:3], 16)}, {int(line_color[3:5], 16)}, {int(line_color[5:7], 16)}, 0.1)",
-        # Cleaned up hover template (Fixes overlap issues)
-        hovertemplate = '<b>Date:</b> %{x|%b %d, %Y}<br><b>Price:</b> %{y:.2f}<extra></extra>'
+        hovertemplate = '<b>Date:</b> %{x|%b %d, %H:%M}<br><b>Price:</b> %{y:.2f}<extra></extra>'
     ))
 
-    fig_price.update_xaxes(
+    # Apply range if it was calculated (Short Term only)
+    xaxis_args = dict(
         rangeslider_visible=True,
         rangeselector=dict(buttons=buttons, bgcolor="#2c3542", activecolor=line_color, font=dict(color="white")),
-        showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='solid', spikecolor="#ffffff", spikethickness=1
+        showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='solid', spikecolor="#ffffff", spikethickness=1,
+        gridcolor='#36404e'
     )
     
+    if start_range and end_range:
+        xaxis_args['range'] = [start_range, end_range]
+
+    fig_price.update_xaxes(**xaxis_args)
+    
     fig_price.update_yaxes(
-        showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='dash', spikecolor="#ffffff", spikethickness=1
+        showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='dash', spikecolor="#ffffff", spikethickness=1,
+        gridcolor='#36404e'
     )
 
     fig_price.update_layout(
         paper_bgcolor='rgba(0,0,0,0)', 
         plot_bgcolor='rgba(0,0,0,0)', 
         font=dict(color='white'),
-        xaxis=dict(gridcolor='#36404e'), 
-        yaxis=dict(gridcolor='#36404e'),
         height=400,
         margin=dict(l=0, r=0),
         hovermode="x unified",
@@ -295,7 +321,6 @@ if not hist_max.empty and len(hist_max) > 1:
     def get_ret(df, days_back=None, fixed_date=None):
         try:
             if fixed_date:
-                # Calculate index for fixed date (timezone naive)
                 idx = df.index.get_indexer([pd.to_datetime(fixed_date)], method='nearest')[0]
                 past_price = df['Close'].iloc[idx]
             else:
