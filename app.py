@@ -174,7 +174,7 @@ if fair_value == 0 or np.isnan(fair_value):
     fair_value = current_price
     calc_desc = "Data insufficient (Market Price used)"
 
-# --- SWS-STYLE SCORING ENGINE (6 CHECKS PER PILLAR) ---
+# --- SWS-STYLE SCORING ENGINE ---
 
 # 1. VALUATION (0-6)
 v_score = 0
@@ -189,12 +189,12 @@ if current_price < analyst_fv: v_score += 1
 f_score = 0
 g_rate = info.get('earningsGrowth', 0)
 rev_g = info.get('revenueGrowth', 0)
-if g_rate > 0.02: f_score += 1  # Savings rate check
-if g_rate > 0.10: f_score += 1  # Market avg check
-if g_rate > 0.20: f_score += 1  # High growth check
-if rev_g > 0.10: f_score += 1   # Rev growth
-if rev_g > 0.20: f_score += 1   # High Rev growth
-if roe > 0.20: f_score += 1     # High ROE (Future proxy)
+if g_rate > 0.02: f_score += 1  
+if g_rate > 0.10: f_score += 1  
+if g_rate > 0.20: f_score += 1  
+if rev_g > 0.10: f_score += 1   
+if rev_g > 0.20: f_score += 1   
+if roe > 0.20: f_score += 1     
 
 # 3. PAST (0-6)
 p_score = 0
@@ -256,19 +256,14 @@ final_scores = [
     (d_score / 6) * 5
 ]
 
-# Determine Color based on Total Score
-total_raw_score = sum(final_scores) # Max 25
-if total_raw_score < 10:
-    flake_color = "#ff4b4b" # Red (Weak)
-elif total_raw_score < 16:
-    flake_color = "#ffb300" # Yellow/Orange (Modest)
-else:
-    flake_color = "#00d09c" # Green (Strong)
+# Color Logic
+total_raw_score = sum(final_scores)
+if total_raw_score < 10: flake_color = "#ff4b4b"
+elif total_raw_score < 16: flake_color = "#ffb300"
+else: flake_color = "#00d09c"
 
-# Helper to create RGBA for fill
 def hex_to_rgba(h, alpha):
     return tuple(int(h.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)) + (alpha,)
-
 fill_rgba = f"rgba{hex_to_rgba(flake_color, 0.4)}"
 
 # --- HEADER UI ---
@@ -287,8 +282,9 @@ with col1:
     m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
 
 with col2:
-    # SNOWFLAKE CHART (UPDATED: SPLINE SHAPE + DYNAMIC COLOR)
-    # We duplicate the first point at the end to close the loop smoothly for spline
+    # --- SNOWFLAKE CHART (SWS REPLICATION) ---
+    # Order: Value -> Future -> Past -> Health -> Dividend (Clockwise from Top)
+    # We repeat the first point at the end to close the spline
     r_vals = final_scores + [final_scores[0]]
     theta_vals = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
     
@@ -296,19 +292,34 @@ with col2:
         r=r_vals,
         theta=theta_vals,
         fill='toself',
-        line_shape='spline', # Makes it round/blobby
+        line_shape='spline', 
         line_color=flake_color,
-        fillcolor=fill_rgba
+        fillcolor=fill_rgba,
+        hoverinfo='text', # Hide default hover
+        text=[f"{s:.1f}/5" for s in r_vals] # Custom hover text
     ))
+    
     fig.update_layout(
         polar=dict(
-            radialaxis=dict(visible=False, range=[0, 5]),
+            radialaxis=dict(
+                visible=True,
+                range=[0, 5],
+                showticklabels=False, # Hide numbers 1-5 on axis
+                gridcolor='#36404e',  # Rings
+                layer='below traces'
+            ),
+            angularaxis=dict(
+                direction='clockwise',
+                rotation=90, # Start at Top
+                gridcolor='#36404e',
+                tickfont=dict(color='white', size=12)
+            ),
             bgcolor='#232b36'
         ),
         paper_bgcolor='rgba(0,0,0,0)',
-        margin=dict(t=20, b=20, l=20, r=20),
+        margin=dict(t=30, b=30, l=30, r=30),
         showlegend=False,
-        height=280
+        height=300
     )
     st.plotly_chart(fig, use_container_width=True)
 
