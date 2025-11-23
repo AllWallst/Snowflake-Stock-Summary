@@ -150,6 +150,14 @@ def calc_dcf(stock, info):
         return dcf_val, growth_rate
     except: return 0, 0
 
+# --- HELPER: ROBUST DATA EXTRACTION ---
+def get_val(df, keys_list):
+    """Safely retrieves the first matching key from a DataFrame or returns 0"""
+    for k in keys_list:
+        if k in df.columns:
+            return df[k].iloc[0]
+    return 0
+
 # --- VARIABLE EXTRACTION ---
 div_rate = info.get('dividendRate', 0)
 if div_rate and current_price and current_price > 0:
@@ -213,45 +221,32 @@ s, t = check(roe > 0.20, "High Future ROE (> 20%)"); f_score+=s; f_details.appen
 p_score = 0
 p_details = []
 try:
-    # Need historical data sorted old to new
     hist_fin = financials.sort_index()
     hist_bs = balance_sheet.sort_index()
     
     if not hist_fin.empty and len(hist_fin) >= 2:
-        # Calculate Basic EPS manually if missing
-        if 'Basic EPS' in hist_fin.columns:
-            eps_series = hist_fin['Basic EPS']
+        # Basic EPS
+        if 'Basic EPS' in hist_fin.columns: eps_series = hist_fin['Basic EPS']
         elif 'Net Income' in hist_fin.columns and 'Basic Average Shares' in hist_fin.columns:
             eps_series = hist_fin['Net Income'] / hist_fin['Basic Average Shares']
-        else:
-            eps_series = pd.Series([0]) # Fallback
+        else: eps_series = pd.Series([0])
 
         curr_eps = eps_series.iloc[-1]
         prev_eps = eps_series.iloc[-2]
-        
-        # 1. EPS Growth vs Industry (Using 12% proxy)
-        # (Current - Prev) / Prev
         eps_growth_1y = (curr_eps - prev_eps) / abs(prev_eps) if prev_eps != 0 else 0
+        
         s, t = check(eps_growth_1y > 0.12, "EPS Growth > Industry Avg (Proxy 12%)"); p_score+=s; p_details.append(t)
+        s, t = check(curr_eps > eps_series.iloc[0], f"Long Term Earnings Growth (vs {len(eps_series)}y ago)"); p_score+=s; p_details.append(t)
         
-        # 2. Long Term Growth (Current vs Oldest available - usually 4 yrs)
-        oldest_eps = eps_series.iloc[0]
-        s, t = check(curr_eps > oldest_eps, f"Long Term Earnings Growth (vs {len(eps_series)}y ago)"); p_score+=s; p_details.append(t)
-        
-        # 3. Accelerated Growth (Current Growth > 5y Avg Growth)
-        # Simple CAGR proxy: (Oldest to Current)
         years = len(eps_series) - 1
-        if years > 0 and oldest_eps > 0 and curr_eps > 0:
-            cagr = (curr_eps / oldest_eps) ** (1/years) - 1
+        if years > 0 and eps_series.iloc[0] > 0 and curr_eps > 0:
+            cagr = (curr_eps / eps_series.iloc[0]) ** (1/years) - 1
             s, t = check(eps_growth_1y > cagr, "Accelerated Growth (1y > Long Term Avg)"); p_score+=s; p_details.append(t)
-        else:
-            p_details.append("❌ Accelerated Growth (Insufficient Data)")
+        else: p_details.append("❌ Accelerated Growth (Insufficient Data)")
 
-        # 4. High ROE
         s, t = check(roe > 0.20, "Return on Equity > 20%"); p_score+=s; p_details.append(t)
         
-        # 5. ROCE Trend (Current > 3y ago)
-        # ROCE = EBIT / (Total Assets - Current Liab)
+        # ROCE Trend
         def get_roce(idx):
             try:
                 ebit = hist_fin['EBIT'].iloc[idx]
@@ -259,47 +254,57 @@ try:
                 curr_liab = hist_bs['Current Liabilities'].iloc[idx]
                 return ebit / (assets - curr_liab)
             except: return 0
-            
         curr_roce = get_roce(-1)
         old_roce = get_roce(-3) if len(hist_fin) >= 3 else get_roce(0)
         s, t = check(curr_roce > old_roce, "ROCE Trend (vs 3y ago)"); p_score+=s; p_details.append(t)
         
-        # 6. ROA vs Industry
         roa = info.get('returnOnAssets', 0)
         s, t = check(roa > 0.06, "Return on Assets > Industry (Proxy 6%)"); p_score+=s; p_details.append(t)
-
     else:
         p_details.append("❌ Insufficient Historical Data")
-        
 except Exception as e:
     p_details.append(f"❌ Error calculating Past Performance: {str(e)}")
 
-# 4. FINANCIAL HEALTH (6 Points)
+# 4. FINANCIAL HEALTH (6 Points) - ROBUST FETCHING
 h_score = 0
 h_details = []
 try:
-    curr_assets = balance_sheet['Current Assets'].iloc[0]
-    curr_liab = balance_sheet['Current Liabilities'].iloc[0]
-    total_liab = balance_sheet['Total Liabilities Net Minority Interest'].iloc[0]
-    total_debt = balance_sheet['Total Debt'].iloc[0]
-    equity = balance_sheet['Stockholders Equity'].iloc[0]
-    cash_bs = balance_sheet['Cash And Cash Equivalents'].iloc[0]
-    ebit = financials['EBIT'].iloc[0]
-    interest = abs(financials['Interest Expense'].iloc[0]) if 'Interest Expense' in financials.columns else 0
-    ocf = cash_flow['Total Cash From Operating Activities'].iloc[0]
+    # Use get_val helper for robust fetching of varying key names
+    curr_assets = get_val(balance_sheet, ['Current Assets'])
+    curr_liab = get_val(balance_sheet, ['Current Liabilities'])
+    
+    total_liab = get_val(balance_sheet, ['Total Liabilities Net Minority Interest', 'Total Liabilities'])
+    total_debt = get_val(balance_sheet, ['Total Debt'])
+    equity = get_val(balance_sheet, ['Stockholders Equity', 'Total Stockholder Equity', 'Total Equity Gross Minority Interest'])
+    cash_bs = get_val(balance_sheet, ['Cash And Cash Equivalents', 'Cash', 'Cash Financial'])
+    
+    ebit = get_val(financials, ['EBIT', 'Net Income']) # Fallback to Net Income if EBIT missing to prevent crash
+    interest = abs(get_val(financials, ['Interest Expense', 'Interest Expense Non Operating']))
+    ocf = get_val(cash_flow, ['Total Cash From Operating Activities', 'Operating Cash Flow'])
 
+    # Checks
     s, t = check(curr_assets > curr_liab, "Short Term Assets > Short Term Liabilities"); h_score+=s; h_details.append(t)
     s, t = check(curr_assets > (total_liab - curr_liab), "Short Term Assets > Long Term Liabilities"); h_score+=s; h_details.append(t)
-    s, t = check((total_debt/equity < 0.40) or (cash_bs > total_debt), "Safe Debt Level (D/E < 40% or Cash > Debt)"); h_score+=s; h_details.append(t)
     
-    prev_debt = balance_sheet['Total Debt'].iloc[1]
-    prev_eq = balance_sheet['Stockholders Equity'].iloc[1]
-    s, t = check((total_debt/equity) < (prev_debt/prev_eq), "Reducing Debt (vs Last Year)"); h_score+=s; h_details.append(t)
+    # Safe Debt/Equity calc
+    de_ratio = total_debt / equity if equity != 0 else 999
+    s, t = check((de_ratio < 0.40) or (cash_bs > total_debt), "Safe Debt Level (D/E < 40% or Cash > Debt)"); h_score+=s; h_details.append(t)
+    
+    # Reducing Debt
+    if len(balance_sheet.columns) > 1:
+        prev_debt = get_val(pd.DataFrame(balance_sheet.iloc[:, 1]), ['Total Debt'])
+        prev_eq = get_val(pd.DataFrame(balance_sheet.iloc[:, 1]), ['Stockholders Equity', 'Total Stockholder Equity'])
+        prev_de = prev_debt / prev_eq if prev_eq != 0 else 999
+        s, t = check(de_ratio < prev_de, "Reducing Debt (vs Last Year)"); h_score+=s; h_details.append(t)
+    else:
+        h_details.append("❌ Reducing Debt (Insufficient Data)")
+
     s, t = check(ocf > (total_debt * 0.2), "Debt Coverage (Cash Flow > 20% Debt)"); h_score+=s; h_details.append(t)
     s, t = check(interest == 0 or (ebit / interest > 5), "Interest Coverage (EBIT > 5x Interest)"); h_score+=s; h_details.append(t)
-except:
+
+except Exception as e:
     h_score = 3
-    h_details.append("❌ Balance Sheet Data Unavailable")
+    h_details.append(f"❌ Balance Sheet Data Unavailable or Error: {str(e)}")
 
 # 5. DIVIDEND (6 Points)
 d_score = 0
@@ -323,8 +328,8 @@ s, t = check(info.get('payoutRatio', 1) < 0.90 and dy > 0, "Earnings Coverage (P
 
 cf_cover = False
 try:
-    div_paid = abs(cash_flow['Cash Dividends Paid'].iloc[0])
-    fcf = cash_flow['Free Cash Flow'].iloc[0]
+    div_paid = abs(get_val(cash_flow, ['Cash Dividends Paid', 'Common Stock Dividend Paid']))
+    fcf = get_val(cash_flow, ['Free Cash Flow'])
     if div_paid < fcf and dy > 0: cf_cover = True
 except: pass
 s, t = check(cf_cover, "Cash Flow Coverage (Divs < FCF)"); d_score+=s; d_details.append(t)
@@ -376,7 +381,7 @@ with col2:
         line_color=flake_color,
         fillcolor=fill_rgba,
         hoverinfo='text',
-        text=[f"{s:.1f}/6" for s in [v_score, f_score, p_score, h_score, d_score, v_score]], # Show raw score on hover
+        text=[f"{s:.1f}/6" for s in [v_score, f_score, p_score, h_score, d_score, v_score]], 
         marker=dict(size=5)
     ))
     
@@ -384,7 +389,7 @@ with col2:
         polar=dict(
             radialaxis=dict(
                 visible=True,
-                range=[0, 6], # Updated Range
+                range=[0, 6],
                 showticklabels=False,
                 gridcolor='#444', 
                 gridwidth=1.5,
@@ -405,10 +410,8 @@ with col2:
     )
     st.plotly_chart(fig, use_container_width=True)
     
-    # --- ANALYSIS BREAKDOWN DROPDOWN ---
     with st.expander("📊 See Analysis Breakdown"):
         tab1, tab2, tab3, tab4, tab5 = st.tabs(["Value", "Future", "Past", "Health", "Dividend"])
-        
         with tab1:
             st.write(f"**Valuation Score: {v_score}/6**")
             for i in v_details: st.markdown(f"<div class='check-item'>{i}</div>", unsafe_allow_html=True)
@@ -536,15 +539,12 @@ st.divider()
 st.header("Financials")
 fin_period = st.radio("Frequency:", ["Annual", "Quarterly"], horizontal=True)
 if fin_period == "Annual":
-    financials = financials.iloc[::-1]
-    balance_sheet = balance_sheet.iloc[::-1]
-    cash_flow = cash_flow.iloc[::-1]
+    financials, balance_sheet, cash_flow = stock.financials.T, stock.balance_sheet.T, stock.cashflow.T
     date_fmt = "%Y"
 else:
-    financials = stock.quarterly_financials.T.iloc[::-1]
-    balance_sheet = stock.quarterly_balance_sheet.T.iloc[::-1]
-    cash_flow = stock.quarterly_cashflow.T.iloc[::-1]
+    financials, balance_sheet, cash_flow = stock.quarterly_financials.T, stock.quarterly_balance_sheet.T, stock.quarterly_cashflow.T
     date_fmt = "%Y-%m"
+financials, balance_sheet, cash_flow = financials.iloc[::-1], balance_sheet.iloc[::-1], cash_flow.iloc[::-1]
 dates = [d.strftime(date_fmt) for d in financials.index]
 
 st.subheader("Performance")
@@ -564,12 +564,15 @@ if not financials.empty:
 st.subheader("Revenue to Profit Conversion (Latest)")
 if not financials.empty:
     latest = financials.iloc[-1]
-    rev_val = latest.get('Total Revenue', latest.get('Revenue', 0))
-    cost_rev = latest.get('Cost Of Revenue', 0)
-    gross_profit = latest.get('Gross Profit', 0)
-    op_exp = latest.get('Operating Expense', 0)
-    net_val = latest.get('Net Income', 0)
+    rev_val = get_val(financials, ['Total Revenue', 'Revenue']) # Use helper
+    cost_rev = get_val(financials, ['Cost Of Revenue', 'Cost of Revenue']) 
+    gross_profit = get_val(financials, ['Gross Profit'])
+    op_exp = get_val(financials, ['Operating Expense'])
+    net_val = get_val(financials, ['Net Income'])
+    
+    # Explicit waterfall logic
     other_exp = rev_val - cost_rev - op_exp - net_val
+    
     fig_water = go.Figure(go.Waterfall(orientation = "v", measure = ["relative", "relative", "total", "relative", "relative", "total"], x = ["Revenue", "COGS", "Gross Profit", "Op Expenses", "Other", "Net Income"], textposition = "auto", text = [f"{rev_val/1e9:.1f}B", f"-{cost_rev/1e9:.1f}B", f"{gross_profit/1e9:.1f}B", f"-{op_exp/1e9:.1f}B", f"-{other_exp/1e9:.1f}B", f"{net_val/1e9:.1f}B"], y = [rev_val, -cost_rev, gross_profit, -op_exp, -other_exp, net_val], connector = {"line":{"color":"white"}}, decreasing = {"marker":{"color":"#ff6384"}}, increasing = {"marker":{"color":"#00d09c"}}, totals = {"marker":{"color":"#36a2eb"}}))
     fig_water.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), yaxis=dict(showgrid=True, gridcolor='#36404e'))
     st.plotly_chart(fig_water, use_container_width=True)
@@ -580,10 +583,16 @@ if not balance_sheet.empty and not cash_flow.empty:
     common_idx = balance_sheet.index.intersection(cash_flow.index)
     bs_align, cf_align = balance_sheet.loc[common_idx], cash_flow.loc[common_idx]
     d_dates = [d.strftime(date_fmt) for d in common_idx]
-    debt, cash, fcf = bs_align.get('Total Debt', []), bs_align.get('Cash And Cash Equivalents', []), cf_align.get('Free Cash Flow', [])
+    
+    # Use robust fetching for lists
+    debt = [get_val(pd.DataFrame(bs_align.iloc[[i]]), ['Total Debt']) for i in range(len(bs_align))]
+    cash = [get_val(pd.DataFrame(bs_align.iloc[[i]]), ['Cash And Cash Equivalents', 'Cash', 'Cash Financial']) for i in range(len(bs_align))]
+    fcf = [get_val(pd.DataFrame(cf_align.iloc[[i]]), ['Free Cash Flow']) for i in range(len(cf_align))]
+
     t_d = [f"{x/1e9:.1f}B" for x in debt]
     t_c = [f"{x/1e9:.1f}B" for x in cash]
     t_f = [f"{x/1e9:.1f}B" for x in fcf]
+    
     fig_debt = go.Figure()
     fig_debt.add_trace(go.Bar(x=d_dates, y=debt, name='Total Debt', marker_color='#ff6384', text=t_d, textposition='auto'))
     fig_debt.add_trace(go.Bar(x=d_dates, y=fcf, name='Free Cash Flow', marker_color='#00d09c', text=t_f, textposition='auto'))
@@ -623,8 +632,9 @@ st.divider()
 st.header("4. Financial Health")
 h1, h2 = st.columns([2, 1])
 with h1:
-    cash = info.get('totalCash', 0)
-    debt_total = info.get('totalDebt', 0)
+    # Use helper for safe extraction
+    cash = get_val(balance_sheet, ['Cash And Cash Equivalents', 'Cash', 'Cash Financial'])
+    debt_total = get_val(balance_sheet, ['Total Debt'])
     fig_h = go.Figure()
     fig_h.add_trace(go.Bar(x=['Cash', 'Debt'], y=[cash, debt_total], marker_color=['#00d09c', '#ff6384'], text=[f"${cash/1e9:.1f}B", f"${debt_total/1e9:.1f}B"], textposition='auto'))
     fig_h.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), margin=dict(t=0, b=0, l=0, r=0), height=200)
