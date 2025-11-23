@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 # --- PAGE CONFIGURATION ---
@@ -22,29 +22,49 @@ st.markdown("""
     .news-card { background-color: #232b36; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 4px solid #00d09c; }
     .news-title { color: white; font-weight: bold; font-size: 1.1em; text-decoration: none; }
     .news-meta { color: #8c97a7; font-size: 0.85em; }
-    /* Fix for Search Box */
+    /* Search Box Fix */
     div[data-baseweb="select"] > div { background-color: #2c3542; color: white; border-color: #444; }
+    
+    /* Performance Grid Styles */
+    .perf-container {
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        gap: 10px;
+        margin-top: 10px;
+        margin-bottom: 20px;
+        background-color: #232b36;
+        padding: 15px;
+        border-radius: 10px;
+        text-align: center;
+    }
+    .perf-item { display: flex; flex-direction: column; }
+    .perf-label { color: #8c97a7; font-size: 0.8rem; margin-bottom: 5px; }
+    .perf-val { font-weight: bold; font-size: 1rem; }
+    .pos { color: #00d09c; }
+    .neg { color: #ff6384; }
+    
+    /* Mobile adjustment for grid */
+    @media (max-width: 800px) {
+        .perf-container { grid-template-columns: repeat(4, 1fr); gap: 15px; }
+    }
     </style>
 """, unsafe_allow_html=True)
 
 # --- SEARCH FUNCTION (YAHOO AUTO-COMPLETE) ---
-@st.cache_data(ttl=3600) # Cache results for 1 hour to speed up
+@st.cache_data(ttl=3600)
 def search_symbol(query):
     if not query: return []
     try:
-        # Yahoo Finance public autocomplete API
         url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}&lang=en-US&region=US&quotesCount=6&newsCount=0"
         headers = {'User-Agent': 'Mozilla/5.0'}
         r = requests.get(url, headers=headers)
         data = r.json()
-        
         results = []
         if 'quotes' in data:
             for q in data['quotes']:
                 symbol = q.get('symbol')
                 name = q.get('shortname') or q.get('longname')
                 exch = q.get('exchange')
-                # Create a nice label: "AAPL - Apple Inc. (NASDAQ)"
                 label = f"{symbol} - {name} ({exch})"
                 results.append((label, symbol))
         return results
@@ -62,41 +82,19 @@ with st.sidebar:
     st.title("📡 MarketRadar")
     
     st.markdown("### 🔎 Symbol Lookup")
-    
-    # 1. Exchange Suffix Helper
-    exchange = st.selectbox("Market / Region", [
-        "All / US", 
-        "Canada (TSX) .TO", 
-        "Canada (Venture) .V", 
-        "UK (London) .L", 
-        "Australia .AX", 
-        "India .NS"
-    ])
-    
-    # 2. Search Input
-    # We use a text input that triggers the lookup
+    exchange = st.selectbox("Market / Region", ["All / US", "Canada (TSX) .TO", "Canada (Venture) .V", "UK (London) .L", "Australia .AX", "India .NS"])
     search_query = st.text_input("Search Company or Ticker", placeholder="e.g. Shopify, Apple...")
     
-    # 3. Dynamic Dropdown (Simulated Auto-complete)
     if search_query:
         search_results = search_symbol(search_query)
-        # Filter based on exchange if selected
-        if "Canada (TSX)" in exchange:
-            search_results = [x for x in search_results if ".TO" in x[1]]
-        elif "Venture" in exchange:
-            search_results = [x for x in search_results if ".V" in x[1]]
+        if "Canada (TSX)" in exchange: search_results = [x for x in search_results if ".TO" in x[1]]
+        elif "Venture" in exchange: search_results = [x for x in search_results if ".V" in x[1]]
             
         if search_results:
-            # Dropdown to select the specific stock
             selected_option = st.selectbox("Select Stock:", options=[x[0] for x in search_results], key="search_select")
-            
-            # Extract the pure symbol (e.g. "SHOP.TO") from the label
-            # Label format: "SHOP.TO - Shopify Inc. (TOR)"
-            new_ticker = selected_option.split(" - ")[0]
-            
             if st.button("Go"):
-                st.query_params["ticker"] = new_ticker
-                st.rerun() # Refresh page
+                st.query_params["ticker"] = selected_option.split(" - ")[0]
+                st.rerun()
         else:
             st.caption("No matching stocks found.")
 
@@ -104,7 +102,6 @@ with st.sidebar:
     st.markdown("### ⚙️ Settings")
     val_method = st.radio("Fair Value Method", ["Discounted Cash Flow (DCF)", "Graham Formula", "Analyst Target"])
 
-# Update ticker from URL
 ticker = st.query_params["ticker"]
 
 # --- FETCH DATA ---
@@ -116,12 +113,11 @@ try:
     if not current_price:
         st.error(f"Ticker '{ticker}' not found. Try searching for the company name in the sidebar.")
         st.stop()
-        
 except Exception as e:
     st.error(f"Error fetching data: {e}")
     st.stop()
 
-# --- CALCULATION FUNCTIONS (Unchanged) ---
+# --- CALCULATION FUNCTIONS ---
 def calc_graham(info):
     eps = info.get('trailingEps', 0)
     bv = info.get('bookValue', 0)
@@ -229,9 +225,12 @@ with col2:
 
 st.divider()
 
-# --- PRICE HISTORY ---
+# --- PRICE HISTORY & RETURNS ---
 st.header("Price History")
+
+# 1. GRAPH CONTROLS
 chart_type = st.radio("Select Timeframe:", ["Long Term (Daily)", "Short Term (Intraday)"], horizontal=True, label_visibility="collapsed")
+
 if chart_type == "Short Term (Intraday)":
     hist_data = stock.history(period="5d", interval="15m")
     buttons = list([dict(count=1, label="1d", step="day", stepmode="backward"), dict(count=5, label="5d", step="day", stepmode="backward"), dict(step="all", label="Show All")])
@@ -241,12 +240,78 @@ else:
     buttons = list([dict(count=1, label="1m", step="month", stepmode="backward"), dict(count=6, label="6m", step="month", stepmode="backward"), dict(count=1, label="YTD", step="year", stepmode="todate"), dict(count=1, label="1y", step="year", stepmode="backward"), dict(count=5, label="5y", step="year", stepmode="backward"), dict(step="all", label="MAX")])
     line_color = '#00d09c'
 
+# 2. GRAPH RENDER
 if not hist_data.empty:
     fig_price = go.Figure()
     fig_price.add_trace(go.Scatter(x=hist_data.index, y=hist_data['Close'], mode='lines', name='Close', line=dict(color=line_color, width=2), fill='tozeroy', fillcolor=f"rgba({int(line_color[1:3], 16)}, {int(line_color[3:5], 16)}, {int(line_color[5:7], 16)}, 0.1)"))
     fig_price.update_xaxes(rangeslider_visible=True, rangeselector=dict(buttons=buttons, bgcolor="#2c3542", activecolor=line_color, font=dict(color="white")))
     fig_price.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), xaxis=dict(gridcolor='#36404e'), yaxis=dict(gridcolor='#36404e'), height=400, margin=dict(l=0, r=0))
     st.plotly_chart(fig_price, use_container_width=True)
+else:
+    st.write("Historical price data unavailable.")
+
+# 3. PERCENTAGE RETURNS (PERFORMANCE STRIP)
+# We need 'max' daily history to calculate these, regardless of what chart is shown above.
+# If chart_type is already long term, reuse it. If short term, fetch max separately.
+if chart_type == "Short Term (Intraday)":
+    hist_max = stock.history(period="max", interval="1d")
+else:
+    hist_max = hist_data
+
+if not hist_max.empty and len(hist_max) > 1:
+    curr = hist_max['Close'].iloc[-1]
+    
+    # Helper to calculate % change
+    def get_ret(df, days_back=None, fixed_date=None):
+        try:
+            if fixed_date:
+                # Find closest available date to fixed_date
+                idx = df.index.get_indexer([pd.to_datetime(fixed_date)], method='nearest')[0]
+                past_price = df['Close'].iloc[idx]
+            else:
+                # Trading days approximation
+                if len(df) < days_back: return "N/A"
+                past_price = df['Close'].iloc[-days_back]
+            
+            val = ((curr - past_price) / past_price) * 100
+            color = "pos" if val >= 0 else "neg"
+            return f'<span class="{color}">{val:+.2f}%</span>'
+        except:
+            return "N/A"
+
+    # YTD Logic
+    ytd_date = datetime(datetime.now().year, 1, 1)
+    
+    # Trading Day Calculations (approx)
+    ret_1d = get_ret(hist_max, 2) # Previous close
+    ret_5d = get_ret(hist_max, 6) # 1 week
+    ret_1m = get_ret(hist_max, 22) # 1 month
+    ret_6m = get_ret(hist_max, 126) # 6 months
+    ret_ytd = get_ret(hist_max, fixed_date=ytd_date)
+    ret_1y = get_ret(hist_max, 252) # 1 year
+    ret_5y = get_ret(hist_max, 1260) # 5 years
+    
+    # All Time
+    try:
+        start_price = hist_max['Close'].iloc[0]
+        all_val = ((curr - start_price) / start_price) * 100
+        all_col = "pos" if all_val >= 0 else "neg"
+        ret_all = f'<span class="{all_col}">{all_val:+.2f}%</span>'
+    except: ret_all = "N/A"
+
+    # HTML Grid for the strip
+    st.markdown(f"""
+    <div class="perf-container">
+        <div class="perf-item"><span class="perf-label">1 Day</span><span class="perf-val">{ret_1d}</span></div>
+        <div class="perf-item"><span class="perf-label">5 Days</span><span class="perf-val">{ret_5d}</span></div>
+        <div class="perf-item"><span class="perf-label">1 Month</span><span class="perf-val">{ret_1m}</span></div>
+        <div class="perf-item"><span class="perf-label">6 Months</span><span class="perf-val">{ret_6m}</span></div>
+        <div class="perf-item"><span class="perf-label">Year to Date</span><span class="perf-val">{ret_ytd}</span></div>
+        <div class="perf-item"><span class="perf-label">1 Year</span><span class="perf-val">{ret_1y}</span></div>
+        <div class="perf-item"><span class="perf-label">5 Years</span><span class="perf-val">{ret_5y}</span></div>
+        <div class="perf-item"><span class="perf-label">All Time</span><span class="perf-val">{ret_all}</span></div>
+    </div>
+    """, unsafe_allow_html=True)
 
 st.divider()
 
@@ -275,12 +340,7 @@ with v_col_right:
 
 st.divider()
 
-# --- FINANCIALS (Same as previous, omitted for brevity but include full Financials logic here) ---
-# Paste the FULL Financials section (Performance, Waterfall, Debt, Earnings) from previous code here
-# ...
-# For brevity in this answer, I'm assuming you kept the Financials section from the last version.
-# If you need me to paste the whole block again, let me know!
-
+# --- FINANCIALS ---
 st.header("Financials")
 fin_period = st.radio("Frequency:", ["Annual", "Quarterly"], horizontal=True)
 if fin_period == "Annual":
@@ -302,6 +362,48 @@ if not financials.empty:
         fig_perf.add_trace(go.Bar(x=dates, y=net_inc, name='Net Income', marker_color='#00d09c'))
         fig_perf.update_layout(barmode='group', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'))
         st.plotly_chart(fig_perf, use_container_width=True)
+        
+# 2. Revenue to Profit (Waterfall)
+st.subheader("Revenue to Profit Conversion (Latest)")
+if not financials.empty:
+    latest = financials.iloc[-1]
+    rev_val = latest.get('Total Revenue', latest.get('Revenue', 0))
+    cost_rev = latest.get('Cost Of Revenue', 0)
+    gross_profit = latest.get('Gross Profit', 0)
+    op_exp = latest.get('Operating Expense', 0)
+    net_val = latest.get('Net Income', 0)
+    other_exp = rev_val - cost_rev - op_exp - net_val
+    fig_water = go.Figure(go.Waterfall(orientation = "v", measure = ["relative", "relative", "total", "relative", "relative", "total"], x = ["Revenue", "COGS", "Gross Profit", "Op Expenses", "Other", "Net Income"], textposition = "outside", text = [f"{rev_val/1e9:.1f}B", f"-{cost_rev/1e9:.1f}B", f"{gross_profit/1e9:.1f}B", f"-{op_exp/1e9:.1f}B", f"-{other_exp/1e9:.1f}B", f"{net_val/1e9:.1f}B"], y = [rev_val, -cost_rev, gross_profit, -op_exp, -other_exp, net_val], connector = {"line":{"color":"white"}}, decreasing = {"marker":{"color":"#ff6384"}}, increasing = {"marker":{"color":"#00d09c"}}, totals = {"marker":{"color":"#36a2eb"}}))
+    fig_water.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), yaxis=dict(showgrid=True, gridcolor='#36404e'))
+    st.plotly_chart(fig_water, use_container_width=True)
+
+# 3. Debt Level
+st.subheader("Debt Level and Coverage")
+if not balance_sheet.empty and not cash_flow.empty:
+    common_idx = balance_sheet.index.intersection(cash_flow.index)
+    bs_align, cf_align = balance_sheet.loc[common_idx], cash_flow.loc[common_idx]
+    d_dates = [d.strftime(date_fmt) for d in common_idx]
+    debt, cash, fcf = bs_align.get('Total Debt', []), bs_align.get('Cash And Cash Equivalents', []), cf_align.get('Free Cash Flow', [])
+    fig_debt = go.Figure()
+    fig_debt.add_trace(go.Bar(x=d_dates, y=debt, name='Total Debt', marker_color='#ff6384'))
+    fig_debt.add_trace(go.Bar(x=d_dates, y=fcf, name='Free Cash Flow', marker_color='#00d09c'))
+    fig_debt.add_trace(go.Bar(x=d_dates, y=cash, name='Cash', marker_color='#36a2eb'))
+    fig_debt.update_layout(barmode='group', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), yaxis=dict(showgrid=True, gridcolor='#36404e'), legend=dict(orientation="h", y=1.1))
+    st.plotly_chart(fig_debt, use_container_width=True)
+
+# 4. Earnings
+st.subheader("Earnings (EPS): Actual vs Estimate")
+try:
+    earn_hist = stock.earnings_history
+    if earn_hist is not None and not earn_hist.empty:
+        earn_hist = earn_hist.sort_values(by="startdatetime")
+        e_dates, actual, estimate = [d.strftime("%Y-%m-%d") for d in earn_hist["startdatetime"]], earn_hist["epsactual"], earn_hist["epsestimate"]
+        fig_earn = go.Figure()
+        fig_earn.add_trace(go.Scatter(x=e_dates, y=estimate, mode='markers', name='Estimate', marker=dict(color='gray', size=10, symbol='circle-open')))
+        fig_earn.add_trace(go.Scatter(x=e_dates, y=actual, mode='markers', name='Actual', marker=dict(color='#00d09c', size=10)))
+        fig_earn.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#36404e'), legend=dict(orientation="h", y=1.1))
+        st.plotly_chart(fig_earn, use_container_width=True)
+except: st.write("Earnings history data unavailable.")
 
 st.divider()
 
@@ -324,7 +426,7 @@ with h1:
     cash = info.get('totalCash', 0)
     debt_total = info.get('totalDebt', 0)
     fig_h = go.Figure()
-    fig_h.add_trace(go.Bar(x=['Cash', 'Debt'], y=[cash, debt_total], marker_color=['#00d09c', '#ff6384'], text=[f"{cash/1e9:.1f}B", f"{debt_total/1e9:.1f}B"], textposition='auto'))
+    fig_h.add_trace(go.Bar(x=['Cash', 'Debt'], y=[cash, debt_total], marker_color=['#00d09c', '#ff6384'], text=[f"${cash/1e9:.1f}B", f"${debt_total/1e9:.1f}B"], textposition='auto'))
     fig_h.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), margin=dict(t=0, b=0, l=0, r=0), height=200)
     st.plotly_chart(fig_h, use_container_width=True)
 with h2:
