@@ -111,10 +111,11 @@ try:
         st.error(f"Ticker '{ticker}' not found. Try searching for the company name in the sidebar.")
         st.stop()
         
-    # Fetch Financials Early for Scoring
+    # Fetch Financials & History for Scoring
     financials = stock.financials.T
     balance_sheet = stock.balance_sheet.T
     cash_flow = stock.cashflow.T
+    div_history = stock.dividends
     
 except Exception as e:
     st.error(f"Error fetching data: {e}")
@@ -174,49 +175,54 @@ if fair_value == 0 or np.isnan(fair_value):
     fair_value = current_price
     calc_desc = "Data insufficient (Market Price used)"
 
-# --- SWS-STYLE SCORING ENGINE ---
+# --- 6-POINT CHECKLIST SCORING ENGINE ---
 
-# 1. VALUATION (0-6)
+# 1. VALUATION (6 Points)
 v_score = 0
-if current_price < fair_value: v_score += 1       
-if current_price < fair_value * 0.8: v_score += 1 
-if info.get('trailingPE', 99) < 25: v_score += 1  
-if info.get('trailingPE', 99) < 35: v_score += 1  
-if peg > 0 and peg < 1.5: v_score += 1    
-if current_price < analyst_fv: v_score += 1       
+if current_price < fair_value: v_score += 1        # 1. Below Fair Value
+if current_price < fair_value * 0.8: v_score += 1  # 2. Significantly Below
+if info.get('trailingPE', 99) < 25: v_score += 1   # 3. PE vs Market
+if info.get('trailingPE', 99) < 35: v_score += 1   # 4. PE vs Peers
+if peg > 0 and peg < 1.5: v_score += 1             # 5. PEG Ratio
+if current_price < analyst_fv: v_score += 1        # 6. Analyst Forecast
 
-# 2. FUTURE (0-6)
+# 2. FUTURE GROWTH (6 Points)
 f_score = 0
 g_rate = info.get('earningsGrowth', 0)
 rev_g = info.get('revenueGrowth', 0)
-if g_rate > 0.02: f_score += 1  
-if g_rate > 0.10: f_score += 1  
-if g_rate > 0.20: f_score += 1  
-if rev_g > 0.10: f_score += 1   
-if rev_g > 0.20: f_score += 1   
-if roe > 0.20: f_score += 1     
+if g_rate > 0.02: f_score += 1   # 1. vs Savings Rate
+if g_rate > 0.10: f_score += 1   # 2. vs Market
+if g_rate > 0.20: f_score += 1   # 3. High Growth Earnings
+if rev_g > 0.10: f_score += 1    # 4. vs Market Revenue
+if rev_g > 0.20: f_score += 1    # 5. High Growth Revenue
+if roe > 0.20: f_score += 1      # 6. Future ROE
 
-# 3. PAST (0-6)
+# 3. PAST PERFORMANCE (6 Points)
 p_score = 0
 try:
     ni = financials['Net Income'].iloc[0] if not financials.empty else 0
     ocf = cash_flow['Total Cash From Operating Activities'].iloc[0] if not cash_flow.empty else 0
-    if ocf > ni: p_score += 1
+    # 1. Quality Earnings
+    if ocf > ni: p_score += 1 
+    # 2. Growing Profit Margin
     curr_rev = financials['Total Revenue'].iloc[0]
     prev_rev = financials['Total Revenue'].iloc[1]
     curr_ni = financials['Net Income'].iloc[0]
     prev_ni = financials['Net Income'].iloc[1]
     if (curr_ni/curr_rev) > (prev_ni/prev_rev): p_score += 1
+    # 3. Earnings Trend (Current > Prev Year)
     if curr_ni > prev_ni: p_score += 1
+    # 4. Accelerating Growth (Current > 3y avg - simplified to > 1.1x prev)
     if curr_ni > prev_ni * 1.1: p_score += 1 
 except: pass
+# 5. Earnings vs Industry (Proxy via high growth)
+if g_rate > 0.10: p_score += 1
+# 6. High ROE
 if roe > 0.20: p_score += 1 
-if info.get('returnOnAssets', 0) > 0.10: p_score += 1 
 
-# 4. HEALTH (0-6) - UPDATED LOGIC
+# 4. FINANCIAL HEALTH (6 Points)
 h_score = 0
 try:
-    # Data Extraction for Health
     curr_assets = balance_sheet['Current Assets'].iloc[0]
     curr_liab = balance_sheet['Current Liabilities'].iloc[0]
     total_liab = balance_sheet['Total Liabilities Net Minority Interest'].iloc[0]
@@ -227,55 +233,53 @@ try:
     interest = abs(financials['Interest Expense'].iloc[0]) if 'Interest Expense' in financials.columns else 0
     ocf = cash_flow['Total Cash From Operating Activities'].iloc[0]
 
-    # 1. Short Term: Do Short Term Assets cover Short Term Liabilities?
+    # 1. Short Term (Assets > Liab)
     if curr_assets > curr_liab: h_score += 1 
-    
-    # 2. Long Term: Do Short Term Assets cover Long Term Liabilities?
-    long_term_liab = total_liab - curr_liab
-    if curr_assets > long_term_liab: h_score += 1 
-    
-    # 3. Debt Level: Debt/Equity < 40% OR Cash > Debt (Fixes Alphabet case)
+    # 2. Long Term (Assets > Long Term Liab)
+    if curr_assets > (total_liab - curr_liab): h_score += 1 
+    # 3. Debt Level (D/E < 40% OR Cash > Debt)
     if (total_debt/equity < 0.40) or (cash_bs > total_debt): h_score += 1 
-    
-    # 4. Reducing Debt: Current D/E < Historical D/E
-    old_debt = balance_sheet['Total Debt'].iloc[-1]
-    old_equity = balance_sheet['Stockholders Equity'].iloc[-1]
-    if (total_debt/equity) < (old_debt/old_equity): h_score += 1
-    
-    # 5. Debt Coverage: OCF > 20% of Total Debt
+    # 4. Reducing Debt
+    prev_debt = balance_sheet['Total Debt'].iloc[1]
+    prev_eq = balance_sheet['Stockholders Equity'].iloc[1]
+    if (total_debt/equity) < (prev_debt/prev_eq): h_score += 1
+    # 5. Debt Coverage (OCF > 20% Debt)
     if ocf > (total_debt * 0.2): h_score += 1
-    
-    # 6. Interest Coverage: EBIT > 5x Interest
+    # 6. Interest Coverage (EBIT > 5x)
     if interest == 0 or (ebit / interest > 5): h_score += 1
+except: h_score = 3 
 
-except: h_score = 3 # Fallback score
-
-# 5. DIVIDEND (0-6)
+# 5. DIVIDEND (6 Points)
 d_score = 0
-if dy > 0: d_score += 1         
-if dy > 0.015: d_score += 1     
-if dy > 0.035: d_score += 1     
-if info.get('payoutRatio', 1) < 0.90: d_score += 1 
+# 1. Notable Dividend (>1.5%)
+if dy > 0.015: d_score += 1
+# 2. High Dividend (>3.5%)
+if dy > 0.035: d_score += 1
+# 3. Stable (10y history of no drops) & 4. Growing (10y)
+try:
+    if not div_history.empty and len(div_history) > 20: # Approx 5-10 years of quarters
+        # Simple check: is current > 5 years ago?
+        curr_div = div_history.iloc[-1]
+        old_div = div_history.iloc[-20] # 5 years ago approx
+        if curr_div >= old_div: d_score += 1 # Stable proxy
+        if curr_div > old_div: d_score += 1 # Growing proxy
+except: pass
+# 5. Earnings Coverage
+if info.get('payoutRatio', 1) < 0.90 and dy > 0: d_score += 1
+# 6. Cash Flow Coverage
 try:
     div_paid = abs(cash_flow['Cash Dividends Paid'].iloc[0])
     fcf = cash_flow['Free Cash Flow'].iloc[0]
-    if div_paid < fcf: d_score += 1 
+    if div_paid < fcf and dy > 0: d_score += 1
 except: pass
-if dy > 0.01: d_score += 1 
 
-# Normalize to 5 for Chart
-final_scores = [
-    (v_score / 6) * 5,
-    (f_score / 6) * 5,
-    (p_score / 6) * 5,
-    (h_score / 6) * 5,
-    (d_score / 6) * 5
-]
+# Final 6-Point Scores
+final_scores = [v_score, f_score, p_score, h_score, d_score]
 
-# Color Logic
+# Color Logic (Max 30 points total)
 total_raw_score = sum(final_scores)
-if total_raw_score < 10: flake_color = "#ff4b4b"
-elif total_raw_score < 16: flake_color = "#ffb300"
+if total_raw_score < 12: flake_color = "#ff4b4b"
+elif total_raw_score < 20: flake_color = "#ffb300"
 else: flake_color = "#00d09c"
 
 def hex_to_rgba(h, alpha):
@@ -298,7 +302,7 @@ with col1:
     m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
 
 with col2:
-    # --- SNOWFLAKE CHART ---
+    # --- SNOWFLAKE CHART (0-6 SCALE) ---
     r_vals = final_scores + [final_scores[0]]
     theta_vals = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
     
@@ -310,7 +314,7 @@ with col2:
         line_color=flake_color,
         fillcolor=fill_rgba,
         hoverinfo='text',
-        text=[f"{s:.1f}/5" for s in r_vals],
+        text=[f"{s}/6" for s in r_vals],
         marker=dict(size=5)
     ))
     
@@ -318,7 +322,7 @@ with col2:
         polar=dict(
             radialaxis=dict(
                 visible=True,
-                range=[0, 5],
+                range=[0, 6], # Updated Range
                 showticklabels=False,
                 gridcolor='#444', 
                 gridwidth=1.5,
