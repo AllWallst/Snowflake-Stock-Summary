@@ -282,9 +282,8 @@ with col1:
     m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
 
 with col2:
-    # --- SNOWFLAKE CHART (SWS REPLICATION) ---
-    # Order: Value -> Future -> Past -> Health -> Dividend (Clockwise from Top)
-    # We repeat the first point at the end to close the spline
+    # --- SNOWFLAKE CHART (EXACT REPLICA) ---
+    # Data Order: Value -> Future -> Past -> Health -> Dividend
     r_vals = final_scores + [final_scores[0]]
     theta_vals = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
     
@@ -295,8 +294,9 @@ with col2:
         line_shape='spline', 
         line_color=flake_color,
         fillcolor=fill_rgba,
-        hoverinfo='text', # Hide default hover
-        text=[f"{s:.1f}/5" for s in r_vals] # Custom hover text
+        hoverinfo='text',
+        text=[f"{s:.1f}/5" for s in r_vals],
+        marker=dict(size=5) # Small dots at vertices
     ))
     
     fig.update_layout(
@@ -304,14 +304,15 @@ with col2:
             radialaxis=dict(
                 visible=True,
                 range=[0, 5],
-                showticklabels=False, # Hide numbers 1-5 on axis
-                gridcolor='#36404e',  # Rings
+                showticklabels=False,
+                gridcolor='#444', # Thicker rings
+                gridwidth=1.5,    # Thicker rings
                 layer='below traces'
             ),
             angularaxis=dict(
-                direction='clockwise',
-                rotation=90, # Start at Top
-                gridcolor='#36404e',
+                direction='clockwise', # SWS direction
+                rotation=90,           # Value at Top
+                gridcolor='rgba(0,0,0,0)', # Hide spokes
                 tickfont=dict(color='white', size=12)
             ),
             bgcolor='#232b36'
