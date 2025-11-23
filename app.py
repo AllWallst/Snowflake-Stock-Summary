@@ -213,22 +213,66 @@ s, t = check(roe > 0.20, "High Future ROE (> 20%)"); f_score+=s; f_details.appen
 p_score = 0
 p_details = []
 try:
-    ni = financials['Net Income'].iloc[0] if not financials.empty else 0
-    ocf = cash_flow['Total Cash From Operating Activities'].iloc[0] if not cash_flow.empty else 0
-    s, t = check(ocf > ni, "High Quality Earnings (Cash Flow > Net Income)"); p_score+=s; p_details.append(t)
+    # Need historical data sorted old to new
+    hist_fin = financials.sort_index()
+    hist_bs = balance_sheet.sort_index()
     
-    curr_rev = financials['Total Revenue'].iloc[0]
-    prev_rev = financials['Total Revenue'].iloc[1]
-    curr_ni = financials['Net Income'].iloc[0]
-    prev_ni = financials['Net Income'].iloc[1]
-    s, t = check((curr_ni/curr_rev) > (prev_ni/prev_rev), "Growing Profit Margin"); p_score+=s; p_details.append(t)
-    s, t = check(curr_ni > prev_ni, "Positive Earnings Trend (vs last year)"); p_score+=s; p_details.append(t)
-    s, t = check(curr_ni > prev_ni * 1.1, "Accelerating Growth (>10% gain)"); p_score+=s; p_details.append(t)
-except: 
-    p_details.append("❌ Insufficient Historical Data")
+    if not hist_fin.empty and len(hist_fin) >= 2:
+        # Calculate Basic EPS manually if missing
+        if 'Basic EPS' in hist_fin.columns:
+            eps_series = hist_fin['Basic EPS']
+        elif 'Net Income' in hist_fin.columns and 'Basic Average Shares' in hist_fin.columns:
+            eps_series = hist_fin['Net Income'] / hist_fin['Basic Average Shares']
+        else:
+            eps_series = pd.Series([0]) # Fallback
 
-s, t = check(g_rate > 0.10, "Earnings vs Industry"); p_score+=s; p_details.append(t)
-s, t = check(roe > 0.20, "High ROE (> 20%)"); p_score+=s; p_details.append(t)
+        curr_eps = eps_series.iloc[-1]
+        prev_eps = eps_series.iloc[-2]
+        
+        # 1. EPS Growth vs Industry (Using 12% proxy)
+        # (Current - Prev) / Prev
+        eps_growth_1y = (curr_eps - prev_eps) / abs(prev_eps) if prev_eps != 0 else 0
+        s, t = check(eps_growth_1y > 0.12, "EPS Growth > Industry Avg (Proxy 12%)"); p_score+=s; p_details.append(t)
+        
+        # 2. Long Term Growth (Current vs Oldest available - usually 4 yrs)
+        oldest_eps = eps_series.iloc[0]
+        s, t = check(curr_eps > oldest_eps, f"Long Term Earnings Growth (vs {len(eps_series)}y ago)"); p_score+=s; p_details.append(t)
+        
+        # 3. Accelerated Growth (Current Growth > 5y Avg Growth)
+        # Simple CAGR proxy: (Oldest to Current)
+        years = len(eps_series) - 1
+        if years > 0 and oldest_eps > 0 and curr_eps > 0:
+            cagr = (curr_eps / oldest_eps) ** (1/years) - 1
+            s, t = check(eps_growth_1y > cagr, "Accelerated Growth (1y > Long Term Avg)"); p_score+=s; p_details.append(t)
+        else:
+            p_details.append("❌ Accelerated Growth (Insufficient Data)")
+
+        # 4. High ROE
+        s, t = check(roe > 0.20, "Return on Equity > 20%"); p_score+=s; p_details.append(t)
+        
+        # 5. ROCE Trend (Current > 3y ago)
+        # ROCE = EBIT / (Total Assets - Current Liab)
+        def get_roce(idx):
+            try:
+                ebit = hist_fin['EBIT'].iloc[idx]
+                assets = hist_bs['Total Assets'].iloc[idx]
+                curr_liab = hist_bs['Current Liabilities'].iloc[idx]
+                return ebit / (assets - curr_liab)
+            except: return 0
+            
+        curr_roce = get_roce(-1)
+        old_roce = get_roce(-3) if len(hist_fin) >= 3 else get_roce(0)
+        s, t = check(curr_roce > old_roce, "ROCE Trend (vs 3y ago)"); p_score+=s; p_details.append(t)
+        
+        # 6. ROA vs Industry
+        roa = info.get('returnOnAssets', 0)
+        s, t = check(roa > 0.06, "Return on Assets > Industry (Proxy 6%)"); p_score+=s; p_details.append(t)
+
+    else:
+        p_details.append("❌ Insufficient Historical Data")
+        
+except Exception as e:
+    p_details.append(f"❌ Error calculating Past Performance: {str(e)}")
 
 # 4. FINANCIAL HEALTH (6 Points)
 h_score = 0
@@ -332,7 +376,7 @@ with col2:
         line_color=flake_color,
         fillcolor=fill_rgba,
         hoverinfo='text',
-        text=[f"{s:.1f}/5" for s in r_vals],
+        text=[f"{s:.1f}/6" for s in [v_score, f_score, p_score, h_score, d_score, v_score]], # Show raw score on hover
         marker=dict(size=5)
     ))
     
@@ -340,7 +384,7 @@ with col2:
         polar=dict(
             radialaxis=dict(
                 visible=True,
-                range=[0, 5],
+                range=[0, 6], # Updated Range
                 showticklabels=False,
                 gridcolor='#444', 
                 gridwidth=1.5,
