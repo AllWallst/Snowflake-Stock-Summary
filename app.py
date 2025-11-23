@@ -155,7 +155,9 @@ def get_val(df, keys_list):
     """Safely retrieves the first matching key from a DataFrame or returns 0"""
     for k in keys_list:
         if k in df.columns:
-            return df[k].iloc[0]
+            val = df[k].iloc[0]
+            if pd.notna(val): # Ensure we don't return NaN
+                return val
     return 0
 
 def fmt_num(num):
@@ -201,7 +203,7 @@ def check(condition, text):
     if condition: return 1, f"✅ {text}"
     else: return 0, f"❌ {text}"
 
-# --- 6-POINT CHECKLIST SCORING ENGINE (WITH VALUES) ---
+# --- 6-POINT CHECKLIST SCORING ENGINE ---
 
 # 1. VALUATION (6 Points)
 v_score = 0
@@ -217,19 +219,15 @@ s, t = check(current_price < analyst_fv, f"Below Analyst Target ({current_price:
 f_score = 0
 f_details = []
 
-# Calculate Smart Growth Rate (Forecast vs Trailing)
+# Smart Growth Calculation (PEG Implied > Forward EPS > Trailing)
 f_eps = info.get('forwardEps', 0) or 0
 t_eps = info.get('trailingEps', 0) or 0
 
 if peg > 0 and pe > 0:
-    # 1. Implicit Growth from PEG (Most accurate to Analyst Annual)
-    # PEG = PE / Growth -> Growth = PE / PEG
-    g_rate = (pe / peg) / 100
+    g_rate = (pe / peg) / 100 # Implied Annual Growth from PEG
 elif f_eps > 0 and t_eps > 0:
-    # 2. Forward EPS Growth (1 Yr Forecast)
     g_rate = (f_eps - t_eps) / t_eps
 else:
-    # 3. Fallback to Trailing (Can be volatile)
     g_rate = info.get('earningsGrowth', 0) or 0
 
 rev_g = info.get('revenueGrowth', 0) or 0
@@ -248,43 +246,32 @@ try:
     hist_fin = financials.sort_index()
     hist_bs = balance_sheet.sort_index()
     
-    if not hist_fin.empty:
-        # FIX: Prepare EPS Series
-        if 'Basic EPS' in hist_fin.columns: 
-            eps_series = hist_fin['Basic EPS']
+    if not hist_fin.empty and len(hist_fin) >= 2:
+        if 'Basic EPS' in hist_fin.columns: eps_series = hist_fin['Basic EPS']
         elif 'Net Income' in hist_fin.columns and 'Basic Average Shares' in hist_fin.columns:
             eps_series = hist_fin['Net Income'] / hist_fin['Basic Average Shares']
-        else: 
-            eps_series = pd.Series([0])
+        else: eps_series = pd.Series([0])
         
-        # FIX: Remove NaN values to find true oldest EPS (Fixes IBM issue)
-        eps_series = eps_series.dropna()
+        eps_series = eps_series.dropna() # Remove NaNs to find true oldest
 
         if len(eps_series) >= 2:
             curr_eps = eps_series.iloc[-1]
             prev_eps = eps_series.iloc[-2]
             oldest_eps = eps_series.iloc[0]
             
-            # 1. EPS Growth vs Industry (Using 12% proxy)
             eps_growth_1y = (curr_eps - prev_eps) / abs(prev_eps) if prev_eps != 0 else 0
             s, t = check(eps_growth_1y > 0.12, f"EPS Growth ({eps_growth_1y*100:.1f}%) > Industry (12%)"); p_score+=s; p_details.append(t)
-            
-            # 2. Long Term Growth (Current vs Oldest available)
             s, t = check(curr_eps > oldest_eps, f"Long Term Growth (EPS: {curr_eps:.2f} > {oldest_eps:.2f})"); p_score+=s; p_details.append(t)
             
-            # 3. Accelerated Growth
             years = len(eps_series) - 1
-            # FIX: Ensure oldest_eps is positive before calculating CAGR to prevent math error
             if years > 0 and oldest_eps > 0 and curr_eps > 0:
                 cagr = (curr_eps / oldest_eps) ** (1/years) - 1
                 s, t = check(eps_growth_1y > cagr, f"Accelerating Growth ({eps_growth_1y*100:.1f}% > {cagr*100:.1f}% Avg)"); p_score+=s; p_details.append(t)
             else:
                 p_details.append("❌ Accelerated Growth (Data requires positive historical earnings)")
 
-            # 4. High ROE
             s, t = check(roe > 0.20, f"High ROE ({roe*100:.1f}% > 20%)"); p_score+=s; p_details.append(t)
             
-            # 5. ROCE Trend
             def get_roce(idx):
                 try:
                     ebit = hist_fin['EBIT'].iloc[idx]
@@ -292,13 +279,10 @@ try:
                     curr_liab = hist_bs['Current Liabilities'].iloc[idx]
                     return ebit / (assets - curr_liab)
                 except: return 0
-            
-            # Safety check for index bounds
             curr_roce = get_roce(-1)
             old_roce = get_roce(-3) if len(hist_fin) >= 3 else get_roce(0)
             s, t = check(curr_roce > old_roce, f"ROCE Trend ({curr_roce*100:.1f}% > {old_roce*100:.1f}%)"); p_score+=s; p_details.append(t)
             
-            # 6. ROA vs Industry
             roa = info.get('returnOnAssets', 0)
             s, t = check(roa > 0.06, f"ROA ({roa*100:.1f}%) > Industry (6%)"); p_score+=s; p_details.append(t)
         else:
@@ -312,31 +296,53 @@ except Exception as e:
 h_score = 0
 h_details = []
 try:
-    curr_assets = get_val(balance_sheet, ['Current Assets'])
-    curr_liab = get_val(balance_sheet, ['Current Liabilities'])
+    curr_assets = get_val(balance_sheet, ['Current Assets', 'Total Current Assets'])
+    curr_liab = get_val(balance_sheet, ['Current Liabilities', 'Total Current Liabilities'])
     total_liab = get_val(balance_sheet, ['Total Liabilities Net Minority Interest', 'Total Liabilities'])
     total_debt = get_val(balance_sheet, ['Total Debt'])
     equity = get_val(balance_sheet, ['Stockholders Equity', 'Total Stockholder Equity'])
-    cash_bs = get_val(balance_sheet, ['Cash And Cash Equivalents', 'Cash'])
+    cash_bs = get_val(balance_sheet, ['Cash And Cash Equivalents', 'Cash', 'Cash Financial'])
     ebit = get_val(financials, ['EBIT', 'Net Income'])
     interest = abs(get_val(financials, ['Interest Expense']))
-    ocf = get_val(cash_flow, ['Total Cash From Operating Activities'])
+    ocf = get_val(cash_flow, ['Total Cash From Operating Activities', 'Operating Cash Flow'])
 
-    s, t = check(curr_assets > curr_liab, f"Short Term Assets ({fmt_num(curr_assets)}) > Liab ({fmt_num(curr_liab)})"); h_score+=s; h_details.append(t)
-    s, t = check(curr_assets > (total_liab - curr_liab), f"Short Term Assets > Long Term Liab ({fmt_num(total_liab - curr_liab)})"); h_score+=s; h_details.append(t)
+    # 1. Short Term (Zero Check for Banks)
+    if curr_assets > 0 and curr_liab > 0:
+        s, t = check(curr_assets > curr_liab, f"Short Term Assets ({fmt_num(curr_assets)}) > Liab ({fmt_num(curr_liab)})")
+    else:
+        s, t = 0, "❌ Short Term Assets/Liab (Data Unavailable/Bank)"
+    h_score+=s; h_details.append(t)
+
+    # 2. Long Term
+    if curr_assets > 0:
+        s, t = check(curr_assets > (total_liab - curr_liab), f"Short Term Assets > Long Term Liab ({fmt_num(total_liab - curr_liab)})")
+    else:
+        s, t = 0, "❌ Long Term Coverage (Data Unavailable/Bank)"
+    h_score+=s; h_details.append(t)
     
+    # 3. Debt Level
     de_ratio = total_debt / equity if equity != 0 else 999
     s, t = check((de_ratio < 0.40) or (cash_bs > total_debt), f"Safe Debt Level (D/E: {de_ratio*100:.0f}% < 40% or Cash > Debt)"); h_score+=s; h_details.append(t)
     
+    # 4. Reducing Debt
     if len(balance_sheet.columns) > 1:
         prev_debt = get_val(pd.DataFrame(balance_sheet.iloc[:, 1]), ['Total Debt'])
-        prev_eq = get_val(pd.DataFrame(balance_sheet.iloc[:, 1]), ['Stockholders Equity'])
+        prev_eq = get_val(pd.DataFrame(balance_sheet.iloc[:, 1]), ['Stockholders Equity', 'Total Stockholder Equity'])
         prev_de = prev_debt / prev_eq if prev_eq != 0 else 999
         s, t = check(de_ratio < prev_de, f"Reducing Debt ({de_ratio*100:.0f}% < {prev_de*100:.0f}%)"); h_score+=s; h_details.append(t)
     else: h_details.append("❌ Reducing Debt (Insufficient Data)")
 
-    s, t = check(ocf > (total_debt * 0.2), f"Debt Coverage (OCF {fmt_num(ocf)} > 20% of Debt)"); h_score+=s; h_details.append(t)
-    s, t = check(interest == 0 or (ebit / interest > 5), f"Interest Coverage (EBIT/Int: {(ebit/interest if interest else 0):.1f}x > 5x)"); h_score+=s; h_details.append(t)
+    # 5. Debt Coverage
+    if total_debt > 0:
+        s, t = check(ocf > (total_debt * 0.2), f"Debt Coverage (OCF {fmt_num(ocf)} > 20% of Debt)"); h_score+=s; h_details.append(t)
+    else:
+        s, t = 1, "✅ Debt Coverage (No Debt)"; h_score+=s; h_details.append(t)
+
+    # 6. Interest Coverage
+    if interest > 0:
+        s, t = check(ebit > (interest * 5), f"Interest Coverage (EBIT/Int: {(ebit/interest):.1f}x > 5x)"); h_score+=s; h_details.append(t)
+    else:
+        s, t = 1, "✅ Interest Coverage (No Interest)"; h_score+=s; h_details.append(t)
 
 except Exception as e:
     h_score = 3
