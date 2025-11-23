@@ -213,24 +213,30 @@ s, t = check(pe > 0 and pe < 35, f"P/E vs Peers Average ({pe:.1f}x < 35x)"); v_s
 s, t = check(peg > 0 and peg < 1.5, f"PEG Ratio within ideal range ({peg:.2f} < 1.5x)"); v_score+=s; v_details.append(t)
 s, t = check(current_price < analyst_fv, f"Below Analyst Target ({current_price:.2f} < {analyst_fv:.2f})"); v_score+=s; v_details.append(t)
 
-# 2. FUTURE GROWTH (6 Points) - FIXED: USE PEG IMPLIED GROWTH
-# Standard info['earningsGrowth'] is trailing quarterly. We need forward.
-# Implied Growth = PE / PEG
+# 2. FUTURE GROWTH (6 Points) - FIXED LOGIC
 f_score = 0
 f_details = []
 
+# Calculate Smart Growth Rate (Forecast vs Trailing)
+f_eps = info.get('forwardEps', 0) or 0
+t_eps = info.get('trailingEps', 0) or 0
+
 if peg > 0 and pe > 0:
-    # PEG = PE / Growth_Rate.  => Growth_Rate = PE / PEG
-    implied_growth_pct = (pe / peg) / 100
+    # 1. Implicit Growth from PEG (Most accurate to Analyst Annual)
+    # PEG = PE / Growth -> Growth = PE / PEG
+    g_rate = (pe / peg) / 100
+elif f_eps > 0 and t_eps > 0:
+    # 2. Forward EPS Growth (1 Yr Forecast)
+    g_rate = (f_eps - t_eps) / t_eps
 else:
-    # Fallback if PEG is missing (less accurate, likely trailing)
-    implied_growth_pct = info.get('earningsGrowth', 0)
+    # 3. Fallback to Trailing (Can be volatile)
+    g_rate = info.get('earningsGrowth', 0) or 0
 
 rev_g = info.get('revenueGrowth', 0) or 0
 
-s, t = check(implied_growth_pct > 0.02, f"Earnings Growth ({implied_growth_pct*100:.1f}%) > Savings Rate (2%)"); f_score+=s; f_details.append(t)
-s, t = check(implied_growth_pct > 0.10, f"Earnings Growth ({implied_growth_pct*100:.1f}%) > Market Avg (10%)"); f_score+=s; f_details.append(t)
-s, t = check(implied_growth_pct > 0.20, f"High Growth Earnings ({implied_growth_pct*100:.1f}%) > 20%"); f_score+=s; f_details.append(t)
+s, t = check(g_rate > 0.02, f"Earnings Growth ({g_rate*100:.1f}%) > Savings Rate (2%)"); f_score+=s; f_details.append(t)
+s, t = check(g_rate > 0.10, f"Earnings Growth ({g_rate*100:.1f}%) > Market Avg (10%)"); f_score+=s; f_details.append(t)
+s, t = check(g_rate > 0.20, f"High Growth Earnings ({g_rate*100:.1f}%) > 20%"); f_score+=s; f_details.append(t)
 s, t = check(rev_g > 0.10, f"Revenue Growth ({rev_g*100:.1f}%) > Market Avg (10%)"); f_score+=s; f_details.append(t)
 s, t = check(rev_g > 0.20, f"High Growth Revenue ({rev_g*100:.1f}%) > 20%"); f_score+=s; f_details.append(t)
 s, t = check(roe > 0.20, f"High Future ROE ({roe*100:.1f}%) > 20%"); f_score+=s; f_details.append(t)
