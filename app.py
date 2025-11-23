@@ -174,100 +174,96 @@ if fair_value == 0 or np.isnan(fair_value):
     fair_value = current_price
     calc_desc = "Data insufficient (Market Price used)"
 
-# --- CALIBRATED SCORING ENGINE (MATCHING SWS STRICTNESS) ---
+# --- SWS-STYLE SCORING ENGINE ---
 
 # 1. VALUATION (0-6)
-# SWS is very strict on "Fair Value". If PE is > 30, it rarely scores high unless growth is massive.
 v_score = 0
 if current_price < fair_value: v_score += 1       
-if current_price < fair_value * 0.8: v_score += 1 # Significant discount
-if info.get('trailingPE', 99) < 20: v_score += 1  # vs Market (SWS uses ~18-22x)
-if info.get('trailingPE', 99) < 30: v_score += 1  # vs Peers/Industry
+if current_price < fair_value * 0.8: v_score += 1 
+if info.get('trailingPE', 99) < 25: v_score += 1  
+if info.get('trailingPE', 99) < 35: v_score += 1  
 if peg > 0 and peg < 1.5: v_score += 1    
 if current_price < analyst_fv: v_score += 1       
 
 # 2. FUTURE (0-6)
-# SWS demands High Growth (>20%) for high scores.
 f_score = 0
 g_rate = info.get('earningsGrowth', 0)
 rev_g = info.get('revenueGrowth', 0)
-if g_rate > 0.05: f_score += 1  # vs Savings (Low bar)
-if g_rate > 0.12: f_score += 1  # vs Market (Mid bar)
-if g_rate > 0.20: f_score += 1  # High Growth (High bar)
-if rev_g > 0.10: f_score += 1   # Rev vs Market
-if rev_g > 0.20: f_score += 1   # High Rev Growth
-if roe > 0.20: f_score += 1     # High ROE
+if g_rate > 0.02: f_score += 1  
+if g_rate > 0.10: f_score += 1  
+if g_rate > 0.20: f_score += 1  
+if rev_g > 0.10: f_score += 1   
+if rev_g > 0.20: f_score += 1   
+if roe > 0.20: f_score += 1     
 
 # 3. PAST (0-6)
 p_score = 0
 try:
     ni = financials['Net Income'].iloc[0] if not financials.empty else 0
     ocf = cash_flow['Total Cash From Operating Activities'].iloc[0] if not cash_flow.empty else 0
-    if ocf > ni: p_score += 1 # Quality Earnings
+    if ocf > ni: p_score += 1
     curr_rev = financials['Total Revenue'].iloc[0]
     prev_rev = financials['Total Revenue'].iloc[1]
     curr_ni = financials['Net Income'].iloc[0]
     prev_ni = financials['Net Income'].iloc[1]
-    if (curr_ni/curr_rev) > (prev_ni/prev_rev): p_score += 1 # Margin expansion
-    if curr_ni > prev_ni: p_score += 1 # Earnings growth
-    if curr_ni > prev_ni * 1.1: p_score += 1 # Momentum
+    if (curr_ni/curr_rev) > (prev_ni/prev_rev): p_score += 1
+    if curr_ni > prev_ni: p_score += 1
+    if curr_ni > prev_ni * 1.1: p_score += 1 
 except: pass
 if roe > 0.20: p_score += 1 
 if info.get('returnOnAssets', 0) > 0.10: p_score += 1 
 
-# 4. HEALTH (0-6)
+# 4. HEALTH (0-6) - UPDATED LOGIC
 h_score = 0
 try:
+    # Data Extraction for Health
     curr_assets = balance_sheet['Current Assets'].iloc[0]
     curr_liab = balance_sheet['Current Liabilities'].iloc[0]
     total_liab = balance_sheet['Total Liabilities Net Minority Interest'].iloc[0]
     total_debt = balance_sheet['Total Debt'].iloc[0]
     equity = balance_sheet['Stockholders Equity'].iloc[0]
+    cash_bs = balance_sheet['Cash And Cash Equivalents'].iloc[0]
     ebit = financials['EBIT'].iloc[0]
-    interest = abs(financials['Interest Expense'].iloc[0])
-    
-    # SWS checks Short Term Assets vs Liabilities (Apple fails this usually)
-    if curr_assets > curr_liab: h_score += 1 
-    # Long term check
-    if curr_assets > total_liab * 0.5: h_score += 1 
-    # Debt to Equity
-    if (total_debt/equity) < 0.40: h_score += 1 
-    # Interest Coverage
-    if interest > 0 and ebit > (interest * 5): h_score += 1 
-    # Debt Coverage (Cash Flow)
+    interest = abs(financials['Interest Expense'].iloc[0]) if 'Interest Expense' in financials.columns else 0
     ocf = cash_flow['Total Cash From Operating Activities'].iloc[0]
+
+    # 1. Short Term: Do Short Term Assets cover Short Term Liabilities?
+    if curr_assets > curr_liab: h_score += 1 
+    
+    # 2. Long Term: Do Short Term Assets cover Long Term Liabilities?
+    long_term_liab = total_liab - curr_liab
+    if curr_assets > long_term_liab: h_score += 1 
+    
+    # 3. Debt Level: Debt/Equity < 40% OR Cash > Debt (Fixes Alphabet case)
+    if (total_debt/equity < 0.40) or (cash_bs > total_debt): h_score += 1 
+    
+    # 4. Reducing Debt: Current D/E < Historical D/E
+    old_debt = balance_sheet['Total Debt'].iloc[-1]
+    old_equity = balance_sheet['Stockholders Equity'].iloc[-1]
+    if (total_debt/equity) < (old_debt/old_equity): h_score += 1
+    
+    # 5. Debt Coverage: OCF > 20% of Total Debt
     if ocf > (total_debt * 0.2): h_score += 1
-    # Balance Sheet Strength (Debt Reducing)
-    prev_debt = balance_sheet['Total Debt'].iloc[1]
-    if total_debt <= prev_debt: h_score += 1
-except: h_score = 3 
+    
+    # 6. Interest Coverage: EBIT > 5x Interest
+    if interest == 0 or (ebit / interest > 5): h_score += 1
+
+except: h_score = 3 # Fallback score
 
 # 5. DIVIDEND (0-6)
-# Strict SWS Logic: Points only for Notable/High yields.
 d_score = 0
-# Check 1: Is it a notable payer? (>1.5% Yield)
-if dy > 0.015: 
-    d_score += 1 # Notable Payer
-    # Check 2: Is it a High payer? (>3.5% Yield)
-    if dy > 0.035: d_score += 1
-    # Check 3: Stability (10y history - proxy via payout)
-    if info.get('payoutRatio', 1) < 0.90: d_score += 1 
-    # Check 4: Growth (proxy via current yield vs 5y avg if avail, or just payout room)
-    if info.get('payoutRatio', 1) < 0.60: d_score += 1 
-    # Check 5: Earnings Coverage
-    if info.get('payoutRatio', 1) < 0.80: d_score += 1
-    # Check 6: Cash Flow Coverage
-    try:
-        div_paid = abs(cash_flow['Cash Dividends Paid'].iloc[0])
-        fcf = cash_flow['Free Cash Flow'].iloc[0]
-        if div_paid < (fcf * 0.8): d_score += 1
-    except: pass
-else:
-    # If yield is tiny (like Apple's 0.38%), SWS gives very low scores (0-1)
-    # We give 1 point if they pay and it's well covered, but no points for "Yield" itself.
-    if dy > 0 and info.get('payoutRatio', 1) < 0.50: d_score += 1
+if dy > 0: d_score += 1         
+if dy > 0.015: d_score += 1     
+if dy > 0.035: d_score += 1     
+if info.get('payoutRatio', 1) < 0.90: d_score += 1 
+try:
+    div_paid = abs(cash_flow['Cash Dividends Paid'].iloc[0])
+    fcf = cash_flow['Free Cash Flow'].iloc[0]
+    if div_paid < fcf: d_score += 1 
+except: pass
+if dy > 0.01: d_score += 1 
 
-# Normalize scores (Max 6) to Chart (Max 5)
+# Normalize to 5 for Chart
 final_scores = [
     (v_score / 6) * 5,
     (f_score / 6) * 5,
@@ -302,7 +298,7 @@ with col1:
     m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
 
 with col2:
-    # --- SNOWFLAKE CHART (EXACT REPLICA) ---
+    # --- SNOWFLAKE CHART ---
     r_vals = final_scores + [final_scores[0]]
     theta_vals = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
     
