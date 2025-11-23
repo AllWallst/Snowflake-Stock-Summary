@@ -265,53 +265,55 @@ try:
 except Exception as e:
     p_details.append(f"❌ Error calculating Past Performance: {str(e)}")
 
-# 4. FINANCIAL HEALTH (6 Points) - ROBUST FETCHING
+# 4. FINANCIAL HEALTH (6 Points)
 h_score = 0
 h_details = []
 try:
-    # Use get_val helper for robust fetching of varying key names
     curr_assets = get_val(balance_sheet, ['Current Assets'])
     curr_liab = get_val(balance_sheet, ['Current Liabilities'])
-    
     total_liab = get_val(balance_sheet, ['Total Liabilities Net Minority Interest', 'Total Liabilities'])
     total_debt = get_val(balance_sheet, ['Total Debt'])
     equity = get_val(balance_sheet, ['Stockholders Equity', 'Total Stockholder Equity', 'Total Equity Gross Minority Interest'])
     cash_bs = get_val(balance_sheet, ['Cash And Cash Equivalents', 'Cash', 'Cash Financial'])
-    
-    ebit = get_val(financials, ['EBIT', 'Net Income']) # Fallback to Net Income if EBIT missing to prevent crash
+    ebit = get_val(financials, ['EBIT', 'Net Income'])
     interest = abs(get_val(financials, ['Interest Expense', 'Interest Expense Non Operating']))
     ocf = get_val(cash_flow, ['Total Cash From Operating Activities', 'Operating Cash Flow'])
 
-    # Checks
     s, t = check(curr_assets > curr_liab, "Short Term Assets > Short Term Liabilities"); h_score+=s; h_details.append(t)
     s, t = check(curr_assets > (total_liab - curr_liab), "Short Term Assets > Long Term Liabilities"); h_score+=s; h_details.append(t)
     
-    # Safe Debt/Equity calc
     de_ratio = total_debt / equity if equity != 0 else 999
     s, t = check((de_ratio < 0.40) or (cash_bs > total_debt), "Safe Debt Level (D/E < 40% or Cash > Debt)"); h_score+=s; h_details.append(t)
     
-    # Reducing Debt
     if len(balance_sheet.columns) > 1:
         prev_debt = get_val(pd.DataFrame(balance_sheet.iloc[:, 1]), ['Total Debt'])
         prev_eq = get_val(pd.DataFrame(balance_sheet.iloc[:, 1]), ['Stockholders Equity', 'Total Stockholder Equity'])
         prev_de = prev_debt / prev_eq if prev_eq != 0 else 999
         s, t = check(de_ratio < prev_de, "Reducing Debt (vs Last Year)"); h_score+=s; h_details.append(t)
-    else:
-        h_details.append("❌ Reducing Debt (Insufficient Data)")
+    else: h_details.append("❌ Reducing Debt (Insufficient Data)")
 
     s, t = check(ocf > (total_debt * 0.2), "Debt Coverage (Cash Flow > 20% Debt)"); h_score+=s; h_details.append(t)
     s, t = check(interest == 0 or (ebit / interest > 5), "Interest Coverage (EBIT > 5x Interest)"); h_score+=s; h_details.append(t)
 
 except Exception as e:
     h_score = 3
-    h_details.append(f"❌ Balance Sheet Data Unavailable or Error: {str(e)}")
+    h_details.append(f"❌ Balance Sheet Data Unavailable: {str(e)}")
 
-# 5. DIVIDEND (6 Points)
+# 5. DIVIDEND (6 Points) - UPDATED LOGIC
 d_score = 0
 d_details = []
-s, t = check(dy > 0.015, "Notable Dividend Yield (> 1.5%)"); d_score+=s; d_details.append(t)
-s, t = check(dy > 0.035, "High Dividend Yield (> 3.5%)"); d_score+=s; d_details.append(t)
 
+# Thresholds
+is_notable = dy > 0.015
+is_high = dy > 0.035
+
+# 1. Notable Dividend
+s, t = check(is_notable, "Notable Dividend Yield (> 1.5%)"); d_score+=s; d_details.append(t)
+
+# 2. High Dividend
+s, t = check(is_high, "High Dividend Yield (> 3.5%)"); d_score+=s; d_details.append(t)
+
+# Check History
 is_stable = False
 is_growing = False
 try:
@@ -321,11 +323,25 @@ try:
         if curr_div >= old_div: is_stable = True
         if curr_div > old_div: is_growing = True
 except: pass
-s, t = check(is_stable, "Stable Dividend (10 Year History)"); d_score+=s; d_details.append(t)
-s, t = check(is_growing, "Growing Dividend (10 Year History)"); d_score+=s; d_details.append(t)
 
+# 3. Stable Dividend (Gated by Notable)
+if is_notable:
+    s, t = check(is_stable, "Stable Dividend (10 Year History)")
+else:
+    s, t = 0, "❌ Stable Dividend (Yield too low to qualify)"
+d_score+=s; d_details.append(t)
+
+# 4. Growing Dividend (Gated by Notable)
+if is_notable:
+    s, t = check(is_growing, "Growing Dividend (10 Year History)")
+else:
+    s, t = 0, "❌ Growing Dividend (Yield too low to qualify)"
+d_score+=s; d_details.append(t)
+
+# 5. Earnings Coverage
 s, t = check(info.get('payoutRatio', 1) < 0.90 and dy > 0, "Earnings Coverage (Payout < 90%)"); d_score+=s; d_details.append(t)
 
+# 6. Cash Flow Coverage
 cf_cover = False
 try:
     div_paid = abs(get_val(cash_flow, ['Cash Dividends Paid', 'Common Stock Dividend Paid']))
@@ -389,7 +405,7 @@ with col2:
         polar=dict(
             radialaxis=dict(
                 visible=True,
-                range=[0, 6],
+                range=[0, 6], # Updated Range
                 showticklabels=False,
                 gridcolor='#444', 
                 gridwidth=1.5,
@@ -539,12 +555,15 @@ st.divider()
 st.header("Financials")
 fin_period = st.radio("Frequency:", ["Annual", "Quarterly"], horizontal=True)
 if fin_period == "Annual":
-    financials, balance_sheet, cash_flow = stock.financials.T, stock.balance_sheet.T, stock.cashflow.T
+    financials = financials.iloc[::-1]
+    balance_sheet = balance_sheet.iloc[::-1]
+    cash_flow = cash_flow.iloc[::-1]
     date_fmt = "%Y"
 else:
-    financials, balance_sheet, cash_flow = stock.quarterly_financials.T, stock.quarterly_balance_sheet.T, stock.quarterly_cashflow.T
+    financials = stock.quarterly_financials.T.iloc[::-1]
+    balance_sheet = stock.quarterly_balance_sheet.T.iloc[::-1]
+    cash_flow = stock.quarterly_cashflow.T.iloc[::-1]
     date_fmt = "%Y-%m"
-financials, balance_sheet, cash_flow = financials.iloc[::-1], balance_sheet.iloc[::-1], cash_flow.iloc[::-1]
 dates = [d.strftime(date_fmt) for d in financials.index]
 
 st.subheader("Performance")
@@ -564,13 +583,11 @@ if not financials.empty:
 st.subheader("Revenue to Profit Conversion (Latest)")
 if not financials.empty:
     latest = financials.iloc[-1]
-    rev_val = get_val(financials, ['Total Revenue', 'Revenue']) # Use helper
+    rev_val = get_val(financials, ['Total Revenue', 'Revenue'])
     cost_rev = get_val(financials, ['Cost Of Revenue', 'Cost of Revenue']) 
     gross_profit = get_val(financials, ['Gross Profit'])
     op_exp = get_val(financials, ['Operating Expense'])
     net_val = get_val(financials, ['Net Income'])
-    
-    # Explicit waterfall logic
     other_exp = rev_val - cost_rev - op_exp - net_val
     
     fig_water = go.Figure(go.Waterfall(orientation = "v", measure = ["relative", "relative", "total", "relative", "relative", "total"], x = ["Revenue", "COGS", "Gross Profit", "Op Expenses", "Other", "Net Income"], textposition = "auto", text = [f"{rev_val/1e9:.1f}B", f"-{cost_rev/1e9:.1f}B", f"{gross_profit/1e9:.1f}B", f"-{op_exp/1e9:.1f}B", f"-{other_exp/1e9:.1f}B", f"{net_val/1e9:.1f}B"], y = [rev_val, -cost_rev, gross_profit, -op_exp, -other_exp, net_val], connector = {"line":{"color":"white"}}, decreasing = {"marker":{"color":"#ff6384"}}, increasing = {"marker":{"color":"#00d09c"}}, totals = {"marker":{"color":"#36a2eb"}}))
@@ -584,7 +601,6 @@ if not balance_sheet.empty and not cash_flow.empty:
     bs_align, cf_align = balance_sheet.loc[common_idx], cash_flow.loc[common_idx]
     d_dates = [d.strftime(date_fmt) for d in common_idx]
     
-    # Use robust fetching for lists
     debt = [get_val(pd.DataFrame(bs_align.iloc[[i]]), ['Total Debt']) for i in range(len(bs_align))]
     cash = [get_val(pd.DataFrame(bs_align.iloc[[i]]), ['Cash And Cash Equivalents', 'Cash', 'Cash Financial']) for i in range(len(bs_align))]
     fcf = [get_val(pd.DataFrame(cf_align.iloc[[i]]), ['Free Cash Flow']) for i in range(len(cf_align))]
@@ -632,7 +648,6 @@ st.divider()
 st.header("4. Financial Health")
 h1, h2 = st.columns([2, 1])
 with h1:
-    # Use helper for safe extraction
     cash = get_val(balance_sheet, ['Cash And Cash Equivalents', 'Cash', 'Cash Financial'])
     debt_total = get_val(balance_sheet, ['Total Debt'])
     fig_h = go.Figure()
