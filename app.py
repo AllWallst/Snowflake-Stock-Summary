@@ -144,8 +144,7 @@ def calc_dcf(stock, info):
         return dcf_val, growth_rate
     except: return 0, 0
 
-# --- VARIABLE EXTRACTION (FIX FOR NAME ERROR) ---
-# We explicitly define these here so they are available for both Scoring AND UI display
+# --- VARIABLE EXTRACTION ---
 div_rate = info.get('dividendRate', 0)
 if div_rate and current_price and current_price > 0:
     dy = div_rate / current_price
@@ -175,26 +174,27 @@ if fair_value == 0 or np.isnan(fair_value):
     fair_value = current_price
     calc_desc = "Data insufficient (Market Price used)"
 
-# --- SWS-STYLE CHECKLIST SCORING ENGINE ---
+# --- SWS-STYLE SCORING ENGINE (6 CHECKS PER PILLAR) ---
+
 # 1. VALUATION (0-6)
 v_score = 0
 if current_price < fair_value: v_score += 1       
 if current_price < fair_value * 0.8: v_score += 1 
 if info.get('trailingPE', 99) < 25: v_score += 1  
 if info.get('trailingPE', 99) < 35: v_score += 1  
-if peg < 1.5: v_score += 1    
+if peg > 0 and peg < 1.5: v_score += 1    
 if current_price < analyst_fv: v_score += 1       
 
 # 2. FUTURE (0-6)
 f_score = 0
 g_rate = info.get('earningsGrowth', 0)
-if g_rate > 0.02: f_score += 1  
-if g_rate > 0.10: f_score += 1  
-if g_rate > 0.20: f_score += 1  
 rev_g = info.get('revenueGrowth', 0)
-if rev_g > 0.10: f_score += 1   
-if rev_g > 0.20: f_score += 1   
-if roe > 0.20: f_score += 1 
+if g_rate > 0.02: f_score += 1  # Savings rate check
+if g_rate > 0.10: f_score += 1  # Market avg check
+if g_rate > 0.20: f_score += 1  # High growth check
+if rev_g > 0.10: f_score += 1   # Rev growth
+if rev_g > 0.20: f_score += 1   # High Rev growth
+if roe > 0.20: f_score += 1     # High ROE (Future proxy)
 
 # 3. PAST (0-6)
 p_score = 0
@@ -227,7 +227,7 @@ try:
     if curr_assets > curr_liab: h_score += 1 
     if curr_assets > total_liab * 0.5: h_score += 1 
     if (total_debt/equity) < 0.40: h_score += 1 
-    if ebit > (interest * 3): h_score += 1 
+    if interest > 0 and ebit > (interest * 3): h_score += 1 
     ocf = cash_flow['Total Cash From Operating Activities'].iloc[0]
     if ocf > (total_debt * 0.2): h_score += 1
     prev_debt = balance_sheet['Total Debt'].iloc[1]
@@ -256,6 +256,21 @@ final_scores = [
     (d_score / 6) * 5
 ]
 
+# Determine Color based on Total Score
+total_raw_score = sum(final_scores) # Max 25
+if total_raw_score < 10:
+    flake_color = "#ff4b4b" # Red (Weak)
+elif total_raw_score < 16:
+    flake_color = "#ffb300" # Yellow/Orange (Modest)
+else:
+    flake_color = "#00d09c" # Green (Strong)
+
+# Helper to create RGBA for fill
+def hex_to_rgba(h, alpha):
+    return tuple(int(h.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)) + (alpha,)
+
+fill_rgba = f"rgba{hex_to_rgba(flake_color, 0.4)}"
+
 # --- HEADER UI ---
 col1, col2 = st.columns([2, 1])
 
@@ -272,15 +287,24 @@ with col1:
     m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
 
 with col2:
+    # SNOWFLAKE CHART (UPDATED: SPLINE SHAPE + DYNAMIC COLOR)
+    # We duplicate the first point at the end to close the loop smoothly for spline
+    r_vals = final_scores + [final_scores[0]]
+    theta_vals = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
+    
     fig = go.Figure(data=go.Scatterpolar(
-        r=final_scores,
-        theta=['Value', 'Future', 'Past', 'Health', 'Dividend'],
+        r=r_vals,
+        theta=theta_vals,
         fill='toself',
-        line_color='#00d09c',
-        fillcolor='rgba(0, 208, 156, 0.2)'
+        line_shape='spline', # Makes it round/blobby
+        line_color=flake_color,
+        fillcolor=fill_rgba
     ))
     fig.update_layout(
-        polar=dict(radialaxis=dict(visible=False, range=[0, 5]), bgcolor='#232b36'),
+        polar=dict(
+            radialaxis=dict(visible=False, range=[0, 5]),
+            bgcolor='#232b36'
+        ),
         paper_bgcolor='rgba(0,0,0,0)',
         margin=dict(t=20, b=20, l=20, r=20),
         showlegend=False,
@@ -300,10 +324,7 @@ start_range = None
 end_range = None
 
 if chart_type == "Short Term (Intraday)":
-    # Request prepost=True to get data outside 9:30-16:00 if available
     hist_data = stock.history(period="5d", interval="15m", prepost=True)
-    
-    # Calculate Range for latest day (7:30 to 18:00)
     if not hist_data.empty:
         last_dt = hist_data.index[-1]
         start_range = last_dt.replace(hour=7, minute=30, second=0, microsecond=0)
@@ -327,64 +348,35 @@ else:
     ])
     line_color = '#00d09c'
 
-# 2. GRAPH RENDER (Interactive)
+# 2. GRAPH RENDER
 if not hist_data.empty:
     fig_price = go.Figure()
-    
     fig_price.add_trace(go.Scatter(
-        x=hist_data.index, 
-        y=hist_data['Close'],
-        mode='lines',
-        name='Close',
+        x=hist_data.index, y=hist_data['Close'], mode='lines', name='Close',
         line=dict(color=line_color, width=2),
-        fill='tozeroy',
-        fillcolor=f"rgba({int(line_color[1:3], 16)}, {int(line_color[3:5], 16)}, {int(line_color[5:7], 16)}, 0.1)",
+        fill='tozeroy', fillcolor=f"rgba({int(line_color[1:3], 16)}, {int(line_color[3:5], 16)}, {int(line_color[5:7], 16)}, 0.1)",
         hovertemplate = '<b>Date:</b> %{x|%b %d, %H:%M}<br><b>Price:</b> %{y:.2f}<extra></extra>'
     ))
-
-    # Apply range if it was calculated (Short Term only)
     xaxis_args = dict(
         rangeslider_visible=True,
         rangeselector=dict(buttons=buttons, bgcolor="#2c3542", activecolor=line_color, font=dict(color="white")),
         showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='solid', spikecolor="#ffffff", spikethickness=1,
         gridcolor='#36404e'
     )
-    
-    if start_range and end_range:
-        xaxis_args['range'] = [start_range, end_range]
-
+    if start_range and end_range: xaxis_args['range'] = [start_range, end_range]
     fig_price.update_xaxes(**xaxis_args)
-    
-    fig_price.update_yaxes(
-        showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='dash', spikecolor="#ffffff", spikethickness=1,
-        gridcolor='#36404e'
-    )
-
-    fig_price.update_layout(
-        paper_bgcolor='rgba(0,0,0,0)', 
-        plot_bgcolor='rgba(0,0,0,0)', 
-        font=dict(color='white'),
-        height=400,
-        margin=dict(l=0, r=0),
-        hovermode="x unified",
-        hoverlabel=dict(bgcolor="#2c3542", font_size=14, font_family="Segoe UI")
-    )
+    fig_price.update_yaxes(showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='dash', spikecolor="#ffffff", spikethickness=1, gridcolor='#36404e')
+    fig_price.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), height=400, margin=dict(l=0, r=0), hovermode="x unified", hoverlabel=dict(bgcolor="#2c3542", font_size=14, font_family="Segoe UI"))
     st.plotly_chart(fig_price, use_container_width=True)
-else:
-    st.write("Historical price data unavailable.")
+else: st.write("Historical price data unavailable.")
 
 # 3. PERCENTAGE RETURNS
-if chart_type == "Short Term (Intraday)":
-    hist_max = stock.history(period="max", interval="1d")
-else:
-    hist_max = hist_data
+if chart_type == "Short Term (Intraday)": hist_max = stock.history(period="max", interval="1d")
+else: hist_max = hist_data
 
 if not hist_max.empty and len(hist_max) > 1:
     curr = hist_max['Close'].iloc[-1]
-    
-    # Pre-process: Drop Timezone info to fix "N/A" on YTD calculations
     hist_max.index = hist_max.index.tz_localize(None)
-
     def get_ret(df, days_back=None, fixed_date=None):
         try:
             if fixed_date:
@@ -397,21 +389,8 @@ if not hist_max.empty and len(hist_max) > 1:
             color = "pos" if val >= 0 else "neg"
             return f'<span class="{color}">{val:+.2f}%</span>'
         except: return "N/A"
-
     ytd_date = datetime(datetime.now().year, 1, 1)
-    
-    st.markdown(f"""
-    <div class="perf-container">
-        <div class="perf-item"><span class="perf-label">1 Day</span><span class="perf-val">{get_ret(hist_max, 2)}</span></div>
-        <div class="perf-item"><span class="perf-label">5 Days</span><span class="perf-val">{get_ret(hist_max, 6)}</span></div>
-        <div class="perf-item"><span class="perf-label">1 Month</span><span class="perf-val">{get_ret(hist_max, 22)}</span></div>
-        <div class="perf-item"><span class="perf-label">6 Months</span><span class="perf-val">{get_ret(hist_max, 126)}</span></div>
-        <div class="perf-item"><span class="perf-label">YTD</span><span class="perf-val">{get_ret(hist_max, fixed_date=ytd_date)}</span></div>
-        <div class="perf-item"><span class="perf-label">1 Year</span><span class="perf-val">{get_ret(hist_max, 252)}</span></div>
-        <div class="perf-item"><span class="perf-label">5 Years</span><span class="perf-val">{get_ret(hist_max, 1260)}</span></div>
-        <div class="perf-item"><span class="perf-label">All Time</span><span class="perf-val">{get_ret(hist_max, days_back=len(hist_max)-1)}</span></div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"""<div class="perf-container"><div class="perf-item"><span class="perf-label">1 Day</span><span class="perf-val">{get_ret(hist_max, 2)}</span></div><div class="perf-item"><span class="perf-label">5 Days</span><span class="perf-val">{get_ret(hist_max, 6)}</span></div><div class="perf-item"><span class="perf-label">1 Month</span><span class="perf-val">{get_ret(hist_max, 22)}</span></div><div class="perf-item"><span class="perf-label">6 Months</span><span class="perf-val">{get_ret(hist_max, 126)}</span></div><div class="perf-item"><span class="perf-label">YTD</span><span class="perf-val">{get_ret(hist_max, fixed_date=ytd_date)}</span></div><div class="perf-item"><span class="perf-label">1 Year</span><span class="perf-val">{get_ret(hist_max, 252)}</span></div><div class="perf-item"><span class="perf-label">5 Years</span><span class="perf-val">{get_ret(hist_max, 1260)}</span></div><div class="perf-item"><span class="perf-label">All Time</span><span class="perf-val">{get_ret(hist_max, days_back=len(hist_max)-1)}</span></div></div>""", unsafe_allow_html=True)
 
 st.divider()
 
@@ -444,12 +423,15 @@ st.divider()
 st.header("Financials")
 fin_period = st.radio("Frequency:", ["Annual", "Quarterly"], horizontal=True)
 if fin_period == "Annual":
-    financials, balance_sheet, cash_flow = stock.financials.T, stock.balance_sheet.T, stock.cashflow.T
+    financials = financials.iloc[::-1]
+    balance_sheet = balance_sheet.iloc[::-1]
+    cash_flow = cash_flow.iloc[::-1]
     date_fmt = "%Y"
 else:
-    financials, balance_sheet, cash_flow = stock.quarterly_financials.T, stock.quarterly_balance_sheet.T, stock.quarterly_cashflow.T
+    financials = stock.quarterly_financials.T.iloc[::-1]
+    balance_sheet = stock.quarterly_balance_sheet.T.iloc[::-1]
+    cash_flow = stock.quarterly_cashflow.T.iloc[::-1]
     date_fmt = "%Y-%m"
-financials, balance_sheet, cash_flow = financials.iloc[::-1], balance_sheet.iloc[::-1], cash_flow.iloc[::-1]
 dates = [d.strftime(date_fmt) for d in financials.index]
 
 st.subheader("Performance")
