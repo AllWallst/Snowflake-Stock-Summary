@@ -158,6 +158,13 @@ def get_val(df, keys_list):
             return df[k].iloc[0]
     return 0
 
+def fmt_num(num):
+    """Formats large numbers for display in checklist"""
+    if num is None: return "N/A"
+    if abs(num) >= 1e9: return f"${num/1e9:.1f}B"
+    if abs(num) >= 1e6: return f"${num/1e6:.1f}M"
+    return f"${num:.2f}"
+
 # --- VARIABLE EXTRACTION ---
 div_rate = info.get('dividendRate', 0)
 if div_rate and current_price and current_price > 0:
@@ -168,6 +175,7 @@ else:
 roe = info.get('returnOnEquity', 0) or 0
 peg = info.get('pegRatio', 0) or 0
 de = info.get('debtToEquity', 0) or 0
+pe = info.get('trailingPE', 0) or 0
 
 # --- RUN CALCULATIONS ---
 graham_fv = calc_graham(info)
@@ -193,29 +201,29 @@ def check(condition, text):
     if condition: return 1, f"✅ {text}"
     else: return 0, f"❌ {text}"
 
-# --- 6-POINT CHECKLIST SCORING ENGINE ---
+# --- 6-POINT CHECKLIST SCORING ENGINE (WITH VALUES) ---
 
 # 1. VALUATION (6 Points)
 v_score = 0
 v_details = []
-s, t = check(current_price < fair_value, "Below Fair Value"); v_score+=s; v_details.append(t)
-s, t = check(current_price < fair_value * 0.8, "Significantly Below Fair Value (>20%)"); v_score+=s; v_details.append(t)
-s, t = check(info.get('trailingPE', 99) < 25, "P/E vs Market Ratio (< 25x)"); v_score+=s; v_details.append(t)
-s, t = check(info.get('trailingPE', 99) < 35, "P/E vs Peers Average (< 35x)"); v_score+=s; v_details.append(t)
-s, t = check(peg > 0 and peg < 1.5, "PEG Ratio within reasonable range (< 1.5x)"); v_score+=s; v_details.append(t)
-s, t = check(current_price < analyst_fv, "Below Analyst Price Target"); v_score+=s; v_details.append(t)
+s, t = check(current_price < fair_value, f"Below Fair Value ({current_price:.2f} < {fair_value:.2f})"); v_score+=s; v_details.append(t)
+s, t = check(current_price < fair_value * 0.8, f"Significantly Below Fair Value ({current_price:.2f} < {(fair_value*0.8):.2f})"); v_score+=s; v_details.append(t)
+s, t = check(pe > 0 and pe < 25, f"P/E vs Market Ratio ({pe:.1f}x < 25x)"); v_score+=s; v_details.append(t)
+s, t = check(pe > 0 and pe < 35, f"P/E vs Peers Average ({pe:.1f}x < 35x)"); v_score+=s; v_details.append(t)
+s, t = check(peg > 0 and peg < 1.5, f"PEG Ratio within ideal range ({peg:.2f} < 1.5x)"); v_score+=s; v_details.append(t)
+s, t = check(current_price < analyst_fv, f"Below Analyst Target ({current_price:.2f} < {analyst_fv:.2f})"); v_score+=s; v_details.append(t)
 
 # 2. FUTURE GROWTH (6 Points)
 f_score = 0
 f_details = []
-g_rate = info.get('earningsGrowth', 0)
-rev_g = info.get('revenueGrowth', 0)
-s, t = check(g_rate > 0.02, "Earnings Growth > Savings Rate (2%)"); f_score+=s; f_details.append(t)
-s, t = check(g_rate > 0.10, "Earnings Growth > Market Avg (10%)"); f_score+=s; f_details.append(t)
-s, t = check(g_rate > 0.20, "High Growth Earnings (> 20%)"); f_score+=s; f_details.append(t)
-s, t = check(rev_g > 0.10, "Revenue Growth > Market Avg (10%)"); f_score+=s; f_details.append(t)
-s, t = check(rev_g > 0.20, "High Growth Revenue (> 20%)"); f_score+=s; f_details.append(t)
-s, t = check(roe > 0.20, "High Future ROE (> 20%)"); f_score+=s; f_details.append(t)
+g_rate = info.get('earningsGrowth', 0) or 0
+rev_g = info.get('revenueGrowth', 0) or 0
+s, t = check(g_rate > 0.02, f"Earnings Growth ({g_rate*100:.1f}%) > Savings Rate (2%)"); f_score+=s; f_details.append(t)
+s, t = check(g_rate > 0.10, f"Earnings Growth ({g_rate*100:.1f}%) > Market Avg (10%)"); f_score+=s; f_details.append(t)
+s, t = check(g_rate > 0.20, f"High Growth Earnings ({g_rate*100:.1f}%) > 20%"); f_score+=s; f_details.append(t)
+s, t = check(rev_g > 0.10, f"Revenue Growth ({rev_g*100:.1f}%) > Market Avg (10%)"); f_score+=s; f_details.append(t)
+s, t = check(rev_g > 0.20, f"High Growth Revenue ({rev_g*100:.1f}%) > 20%"); f_score+=s; f_details.append(t)
+s, t = check(roe > 0.20, f"High Future ROE ({roe*100:.1f}%) > 20%"); f_score+=s; f_details.append(t)
 
 # 3. PAST PERFORMANCE (6 Points)
 p_score = 0
@@ -225,7 +233,6 @@ try:
     hist_bs = balance_sheet.sort_index()
     
     if not hist_fin.empty and len(hist_fin) >= 2:
-        # Basic EPS
         if 'Basic EPS' in hist_fin.columns: eps_series = hist_fin['Basic EPS']
         elif 'Net Income' in hist_fin.columns and 'Basic Average Shares' in hist_fin.columns:
             eps_series = hist_fin['Net Income'] / hist_fin['Basic Average Shares']
@@ -235,18 +242,18 @@ try:
         prev_eps = eps_series.iloc[-2]
         eps_growth_1y = (curr_eps - prev_eps) / abs(prev_eps) if prev_eps != 0 else 0
         
-        s, t = check(eps_growth_1y > 0.12, "EPS Growth > Industry Avg (Proxy 12%)"); p_score+=s; p_details.append(t)
-        s, t = check(curr_eps > eps_series.iloc[0], f"Long Term Earnings Growth (vs {len(eps_series)}y ago)"); p_score+=s; p_details.append(t)
+        # Checks with values
+        s, t = check(eps_growth_1y > 0.12, f"EPS Growth ({eps_growth_1y*100:.1f}%) > Industry (12%)"); p_score+=s; p_details.append(t)
+        s, t = check(curr_eps > eps_series.iloc[0], f"Long Term Growth (EPS: {curr_eps:.2f} > {eps_series.iloc[0]:.2f})"); p_score+=s; p_details.append(t)
         
         years = len(eps_series) - 1
         if years > 0 and eps_series.iloc[0] > 0 and curr_eps > 0:
             cagr = (curr_eps / eps_series.iloc[0]) ** (1/years) - 1
-            s, t = check(eps_growth_1y > cagr, "Accelerated Growth (1y > Long Term Avg)"); p_score+=s; p_details.append(t)
+            s, t = check(eps_growth_1y > cagr, f"Accelerating Growth ({eps_growth_1y*100:.1f}% > {cagr*100:.1f}% Avg)"); p_score+=s; p_details.append(t)
         else: p_details.append("❌ Accelerated Growth (Insufficient Data)")
 
-        s, t = check(roe > 0.20, "Return on Equity > 20%"); p_score+=s; p_details.append(t)
+        s, t = check(roe > 0.20, f"High ROE ({roe*100:.1f}% > 20%)"); p_score+=s; p_details.append(t)
         
-        # ROCE Trend
         def get_roce(idx):
             try:
                 ebit = hist_fin['EBIT'].iloc[idx]
@@ -256,14 +263,14 @@ try:
             except: return 0
         curr_roce = get_roce(-1)
         old_roce = get_roce(-3) if len(hist_fin) >= 3 else get_roce(0)
-        s, t = check(curr_roce > old_roce, "ROCE Trend (vs 3y ago)"); p_score+=s; p_details.append(t)
+        s, t = check(curr_roce > old_roce, f"ROCE Trend ({curr_roce*100:.1f}% > {old_roce*100:.1f}%)"); p_score+=s; p_details.append(t)
         
         roa = info.get('returnOnAssets', 0)
-        s, t = check(roa > 0.06, "Return on Assets > Industry (Proxy 6%)"); p_score+=s; p_details.append(t)
+        s, t = check(roa > 0.06, f"ROA ({roa*100:.1f}%) > Industry (6%)"); p_score+=s; p_details.append(t)
     else:
         p_details.append("❌ Insufficient Historical Data")
 except Exception as e:
-    p_details.append(f"❌ Error calculating Past Performance: {str(e)}")
+    p_details.append(f"❌ Error in Past Performance: {str(e)}")
 
 # 4. FINANCIAL HEALTH (6 Points)
 h_score = 0
@@ -273,47 +280,40 @@ try:
     curr_liab = get_val(balance_sheet, ['Current Liabilities'])
     total_liab = get_val(balance_sheet, ['Total Liabilities Net Minority Interest', 'Total Liabilities'])
     total_debt = get_val(balance_sheet, ['Total Debt'])
-    equity = get_val(balance_sheet, ['Stockholders Equity', 'Total Stockholder Equity', 'Total Equity Gross Minority Interest'])
-    cash_bs = get_val(balance_sheet, ['Cash And Cash Equivalents', 'Cash', 'Cash Financial'])
+    equity = get_val(balance_sheet, ['Stockholders Equity', 'Total Stockholder Equity'])
+    cash_bs = get_val(balance_sheet, ['Cash And Cash Equivalents', 'Cash'])
     ebit = get_val(financials, ['EBIT', 'Net Income'])
-    interest = abs(get_val(financials, ['Interest Expense', 'Interest Expense Non Operating']))
-    ocf = get_val(cash_flow, ['Total Cash From Operating Activities', 'Operating Cash Flow'])
+    interest = abs(get_val(financials, ['Interest Expense']))
+    ocf = get_val(cash_flow, ['Total Cash From Operating Activities'])
 
-    s, t = check(curr_assets > curr_liab, "Short Term Assets > Short Term Liabilities"); h_score+=s; h_details.append(t)
-    s, t = check(curr_assets > (total_liab - curr_liab), "Short Term Assets > Long Term Liabilities"); h_score+=s; h_details.append(t)
+    s, t = check(curr_assets > curr_liab, f"Short Term Assets ({fmt_num(curr_assets)}) > Liab ({fmt_num(curr_liab)})"); h_score+=s; h_details.append(t)
+    s, t = check(curr_assets > (total_liab - curr_liab), f"Short Term Assets > Long Term Liab ({fmt_num(total_liab - curr_liab)})"); h_score+=s; h_details.append(t)
     
     de_ratio = total_debt / equity if equity != 0 else 999
-    s, t = check((de_ratio < 0.40) or (cash_bs > total_debt), "Safe Debt Level (D/E < 40% or Cash > Debt)"); h_score+=s; h_details.append(t)
+    s, t = check((de_ratio < 0.40) or (cash_bs > total_debt), f"Safe Debt Level (D/E: {de_ratio*100:.0f}% < 40% or Cash > Debt)"); h_score+=s; h_details.append(t)
     
     if len(balance_sheet.columns) > 1:
         prev_debt = get_val(pd.DataFrame(balance_sheet.iloc[:, 1]), ['Total Debt'])
-        prev_eq = get_val(pd.DataFrame(balance_sheet.iloc[:, 1]), ['Stockholders Equity', 'Total Stockholder Equity'])
+        prev_eq = get_val(pd.DataFrame(balance_sheet.iloc[:, 1]), ['Stockholders Equity'])
         prev_de = prev_debt / prev_eq if prev_eq != 0 else 999
-        s, t = check(de_ratio < prev_de, "Reducing Debt (vs Last Year)"); h_score+=s; h_details.append(t)
+        s, t = check(de_ratio < prev_de, f"Reducing Debt ({de_ratio*100:.0f}% < {prev_de*100:.0f}%)"); h_score+=s; h_details.append(t)
     else: h_details.append("❌ Reducing Debt (Insufficient Data)")
 
-    s, t = check(ocf > (total_debt * 0.2), "Debt Coverage (Cash Flow > 20% Debt)"); h_score+=s; h_details.append(t)
-    s, t = check(interest == 0 or (ebit / interest > 5), "Interest Coverage (EBIT > 5x Interest)"); h_score+=s; h_details.append(t)
+    s, t = check(ocf > (total_debt * 0.2), f"Debt Coverage (OCF {fmt_num(ocf)} > 20% of Debt)"); h_score+=s; h_details.append(t)
+    s, t = check(interest == 0 or (ebit / interest > 5), f"Interest Coverage (EBIT/Int: {(ebit/interest if interest else 0):.1f}x > 5x)"); h_score+=s; h_details.append(t)
 
 except Exception as e:
     h_score = 3
     h_details.append(f"❌ Balance Sheet Data Unavailable: {str(e)}")
 
-# 5. DIVIDEND (6 Points) - UPDATED LOGIC
+# 5. DIVIDEND (6 Points)
 d_score = 0
 d_details = []
 
-# Thresholds
 is_notable = dy > 0.015
-is_high = dy > 0.035
+s, t = check(is_notable, f"Notable Dividend ({dy*100:.2f}% > 1.5%)"); d_score+=s; d_details.append(t)
+s, t = check(dy > 0.035, f"High Dividend ({dy*100:.2f}% > 3.5%)"); d_score+=s; d_details.append(t)
 
-# 1. Notable Dividend
-s, t = check(is_notable, "Notable Dividend Yield (> 1.5%)"); d_score+=s; d_details.append(t)
-
-# 2. High Dividend
-s, t = check(is_high, "High Dividend Yield (> 3.5%)"); d_score+=s; d_details.append(t)
-
-# Check History
 is_stable = False
 is_growing = False
 try:
@@ -324,43 +324,30 @@ try:
         if curr_div > old_div: is_growing = True
 except: pass
 
-# 3. Stable Dividend (Gated by Notable)
 if is_notable:
-    s, t = check(is_stable, "Stable Dividend (10 Year History)")
+    s, t = check(is_stable, "Stable Dividend (10 Year History)"); d_score+=s; d_details.append(t)
+    s, t = check(is_growing, "Growing Dividend (10 Year History)"); d_score+=s; d_details.append(t)
 else:
-    s, t = 0, "❌ Stable Dividend (Yield too low to qualify)"
-d_score+=s; d_details.append(t)
+    d_details.append("❌ Stable Dividend (Yield too low to qualify)")
+    d_details.append("❌ Growing Dividend (Yield too low to qualify)")
 
-# 4. Growing Dividend (Gated by Notable)
-if is_notable:
-    s, t = check(is_growing, "Growing Dividend (10 Year History)")
-else:
-    s, t = 0, "❌ Growing Dividend (Yield too low to qualify)"
-d_score+=s; d_details.append(t)
+payout = info.get('payoutRatio', 0) or 0
+s, t = check(payout < 0.90 and dy > 0, f"Earnings Coverage (Payout: {payout*100:.0f}% < 90%)"); d_score+=s; d_details.append(t)
 
-# 5. Earnings Coverage
-s, t = check(info.get('payoutRatio', 1) < 0.90 and dy > 0, "Earnings Coverage (Payout < 90%)"); d_score+=s; d_details.append(t)
-
-# 6. Cash Flow Coverage
 cf_cover = False
 try:
     div_paid = abs(get_val(cash_flow, ['Cash Dividends Paid', 'Common Stock Dividend Paid']))
     fcf = get_val(cash_flow, ['Free Cash Flow'])
     if div_paid < fcf and dy > 0: cf_cover = True
-except: pass
-s, t = check(cf_cover, "Cash Flow Coverage (Divs < FCF)"); d_score+=s; d_details.append(t)
+    s, t = check(cf_cover, f"Cash Flow Coverage (Div: {fmt_num(div_paid)} < FCF: {fmt_num(fcf)})"); d_score+=s; d_details.append(t)
+except: 
+    d_details.append("❌ Cash Flow Coverage (Data Unavailable)")
 
 # Normalize to 5 for Chart
-final_scores = [
-    (v_score / 6) * 5,
-    (f_score / 6) * 5,
-    (p_score / 6) * 5,
-    (h_score / 6) * 5,
-    (d_score / 6) * 5
-]
+final_scores = [(s/6)*5 for s in [v_score, f_score, p_score, h_score, d_score]]
 
 # Color Logic
-total_raw_score = sum(final_scores)
+total_raw_score = sum([v_score, f_score, p_score, h_score, d_score])
 if total_raw_score < 12: flake_color = "#ff4b4b"
 elif total_raw_score < 20: flake_color = "#ffb300"
 else: flake_color = "#00d09c"
@@ -397,7 +384,7 @@ with col2:
         line_color=flake_color,
         fillcolor=fill_rgba,
         hoverinfo='text',
-        text=[f"{s:.1f}/6" for s in [v_score, f_score, p_score, h_score, d_score, v_score]], 
+        text=[f"{s}/6" for s in [v_score, f_score, p_score, h_score, d_score, v_score]], 
         marker=dict(size=5)
     ))
     
