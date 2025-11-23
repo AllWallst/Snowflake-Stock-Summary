@@ -144,12 +144,17 @@ def calc_dcf(stock, info):
         return dcf_val, growth_rate
     except: return 0, 0
 
-# --- DATA PREP: SAFE DIVIDEND YIELD ---
+# --- VARIABLE EXTRACTION (FIX FOR NAME ERROR) ---
+# We explicitly define these here so they are available for both Scoring AND UI display
 div_rate = info.get('dividendRate', 0)
 if div_rate and current_price and current_price > 0:
     dy = div_rate / current_price
 else:
-    dy = info.get('dividendYield', 0)
+    dy = info.get('dividendYield', 0) or 0
+
+roe = info.get('returnOnEquity', 0) or 0
+peg = info.get('pegRatio', 0) or 0
+de = info.get('debtToEquity', 0) or 0
 
 # --- RUN CALCULATIONS ---
 graham_fv = calc_graham(info)
@@ -171,49 +176,42 @@ if fair_value == 0 or np.isnan(fair_value):
     calc_desc = "Data insufficient (Market Price used)"
 
 # --- SWS-STYLE CHECKLIST SCORING ENGINE ---
-# Each pillar calculates a score out of 6 based on specific boolean checks.
-# The final score is normalized to 5 for the chart.
-
 # 1. VALUATION (0-6)
 v_score = 0
-if current_price < fair_value: v_score += 1       # Below Fair Value
-if current_price < fair_value * 0.8: v_score += 1 # Significantly Below
-if info.get('trailingPE', 99) < 25: v_score += 1  # vs Market (Approx 25)
-if info.get('trailingPE', 99) < 35: v_score += 1  # vs Peers/Industry (Proxy)
-if info.get('pegRatio', 5) < 1.5: v_score += 1    # PEG (Fair Ratio)
-if current_price < analyst_fv: v_score += 1       # Analyst Forecast
+if current_price < fair_value: v_score += 1       
+if current_price < fair_value * 0.8: v_score += 1 
+if info.get('trailingPE', 99) < 25: v_score += 1  
+if info.get('trailingPE', 99) < 35: v_score += 1  
+if peg < 1.5: v_score += 1    
+if current_price < analyst_fv: v_score += 1       
 
 # 2. FUTURE (0-6)
 f_score = 0
 g_rate = info.get('earningsGrowth', 0)
-if g_rate > 0.02: f_score += 1  # vs Savings Rate
-if g_rate > 0.10: f_score += 1  # vs Market
-if g_rate > 0.20: f_score += 1  # High Growth
+if g_rate > 0.02: f_score += 1  
+if g_rate > 0.10: f_score += 1  
+if g_rate > 0.20: f_score += 1  
 rev_g = info.get('revenueGrowth', 0)
-if rev_g > 0.10: f_score += 1   # Rev vs Market
-if rev_g > 0.20: f_score += 1   # High Rev Growth
-if info.get('returnOnEquity', 0) > 0.20: f_score += 1 # Future ROE (Proxy with current)
+if rev_g > 0.10: f_score += 1   
+if rev_g > 0.20: f_score += 1   
+if roe > 0.20: f_score += 1 
 
 # 3. PAST (0-6)
 p_score = 0
 try:
     ni = financials['Net Income'].iloc[0] if not financials.empty else 0
     ocf = cash_flow['Total Cash From Operating Activities'].iloc[0] if not cash_flow.empty else 0
-    # Check 1: Quality Earnings
     if ocf > ni: p_score += 1
-    # Check 2: Profit Margin Growth
     curr_rev = financials['Total Revenue'].iloc[0]
     prev_rev = financials['Total Revenue'].iloc[1]
     curr_ni = financials['Net Income'].iloc[0]
     prev_ni = financials['Net Income'].iloc[1]
     if (curr_ni/curr_rev) > (prev_ni/prev_rev): p_score += 1
-    # Check 3: Earnings Trend (Positive last year)
     if curr_ni > prev_ni: p_score += 1
-    # Check 4: Growth Acceleration (Current > 3yr avg - simplified)
     if curr_ni > prev_ni * 1.1: p_score += 1 
 except: pass
-if info.get('returnOnEquity', 0) > 0.20: p_score += 1 # High ROE
-if info.get('returnOnAssets', 0) > 0.10: p_score += 1 # ROA
+if roe > 0.20: p_score += 1 
+if info.get('returnOnAssets', 0) > 0.10: p_score += 1 
 
 # 4. HEALTH (0-6)
 h_score = 0
@@ -226,30 +224,28 @@ try:
     ebit = financials['EBIT'].iloc[0]
     interest = abs(financials['Interest Expense'].iloc[0])
     
-    if curr_assets > curr_liab: h_score += 1 # Short term
-    if curr_assets > total_liab * 0.5: h_score += 1 # Long term proxy
-    if (total_debt/equity) < 0.40: h_score += 1 # Debt Level
-    if ebit > (interest * 3): h_score += 1 # Interest Coverage
-    # Debt Coverage (OCF > 20% of Debt)
+    if curr_assets > curr_liab: h_score += 1 
+    if curr_assets > total_liab * 0.5: h_score += 1 
+    if (total_debt/equity) < 0.40: h_score += 1 
+    if ebit > (interest * 3): h_score += 1 
     ocf = cash_flow['Total Cash From Operating Activities'].iloc[0]
     if ocf > (total_debt * 0.2): h_score += 1
-    # Reducing Debt (Current < Prev)
     prev_debt = balance_sheet['Total Debt'].iloc[1]
     if total_debt < prev_debt: h_score += 1
-except: h_score = 3 # Default if data missing
+except: h_score = 3 
 
 # 5. DIVIDEND (0-6)
 d_score = 0
-if dy > 0: d_score += 1         # Payer
-if dy > 0.015: d_score += 1     # Notable (>1.5%)
-if dy > 0.035: d_score += 1     # High (>3.5%)
-if info.get('payoutRatio', 1) < 0.90: d_score += 1 # Coverage
+if dy > 0: d_score += 1         
+if dy > 0.015: d_score += 1     
+if dy > 0.035: d_score += 1     
+if info.get('payoutRatio', 1) < 0.90: d_score += 1 
 try:
     div_paid = abs(cash_flow['Cash Dividends Paid'].iloc[0])
     fcf = cash_flow['Free Cash Flow'].iloc[0]
-    if div_paid < fcf: d_score += 1 # Cash Flow Coverage
+    if div_paid < fcf: d_score += 1 
 except: pass
-if dy > 0.01: d_score += 1 # Stability (Proxy: just giving points if > 1%)
+if dy > 0.01: d_score += 1 
 
 # Normalize to 5 for Chart
 final_scores = [
@@ -304,7 +300,10 @@ start_range = None
 end_range = None
 
 if chart_type == "Short Term (Intraday)":
+    # Request prepost=True to get data outside 9:30-16:00 if available
     hist_data = stock.history(period="5d", interval="15m", prepost=True)
+    
+    # Calculate Range for latest day (7:30 to 18:00)
     if not hist_data.empty:
         last_dt = hist_data.index[-1]
         start_range = last_dt.replace(hour=7, minute=30, second=0, microsecond=0)
@@ -328,35 +327,64 @@ else:
     ])
     line_color = '#00d09c'
 
-# 2. GRAPH RENDER
+# 2. GRAPH RENDER (Interactive)
 if not hist_data.empty:
     fig_price = go.Figure()
+    
     fig_price.add_trace(go.Scatter(
-        x=hist_data.index, y=hist_data['Close'], mode='lines', name='Close',
+        x=hist_data.index, 
+        y=hist_data['Close'],
+        mode='lines',
+        name='Close',
         line=dict(color=line_color, width=2),
-        fill='tozeroy', fillcolor=f"rgba({int(line_color[1:3], 16)}, {int(line_color[3:5], 16)}, {int(line_color[5:7], 16)}, 0.1)",
+        fill='tozeroy',
+        fillcolor=f"rgba({int(line_color[1:3], 16)}, {int(line_color[3:5], 16)}, {int(line_color[5:7], 16)}, 0.1)",
         hovertemplate = '<b>Date:</b> %{x|%b %d, %H:%M}<br><b>Price:</b> %{y:.2f}<extra></extra>'
     ))
+
+    # Apply range if it was calculated (Short Term only)
     xaxis_args = dict(
         rangeslider_visible=True,
         rangeselector=dict(buttons=buttons, bgcolor="#2c3542", activecolor=line_color, font=dict(color="white")),
         showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='solid', spikecolor="#ffffff", spikethickness=1,
         gridcolor='#36404e'
     )
-    if start_range and end_range: xaxis_args['range'] = [start_range, end_range]
+    
+    if start_range and end_range:
+        xaxis_args['range'] = [start_range, end_range]
+
     fig_price.update_xaxes(**xaxis_args)
-    fig_price.update_yaxes(showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='dash', spikecolor="#ffffff", spikethickness=1, gridcolor='#36404e')
-    fig_price.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), height=400, margin=dict(l=0, r=0), hovermode="x unified", hoverlabel=dict(bgcolor="#2c3542", font_size=14, font_family="Segoe UI"))
+    
+    fig_price.update_yaxes(
+        showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='dash', spikecolor="#ffffff", spikethickness=1,
+        gridcolor='#36404e'
+    )
+
+    fig_price.update_layout(
+        paper_bgcolor='rgba(0,0,0,0)', 
+        plot_bgcolor='rgba(0,0,0,0)', 
+        font=dict(color='white'),
+        height=400,
+        margin=dict(l=0, r=0),
+        hovermode="x unified",
+        hoverlabel=dict(bgcolor="#2c3542", font_size=14, font_family="Segoe UI")
+    )
     st.plotly_chart(fig_price, use_container_width=True)
-else: st.write("Historical price data unavailable.")
+else:
+    st.write("Historical price data unavailable.")
 
 # 3. PERCENTAGE RETURNS
-if chart_type == "Short Term (Intraday)": hist_max = stock.history(period="max", interval="1d")
-else: hist_max = hist_data
+if chart_type == "Short Term (Intraday)":
+    hist_max = stock.history(period="max", interval="1d")
+else:
+    hist_max = hist_data
 
 if not hist_max.empty and len(hist_max) > 1:
     curr = hist_max['Close'].iloc[-1]
+    
+    # Pre-process: Drop Timezone info to fix "N/A" on YTD calculations
     hist_max.index = hist_max.index.tz_localize(None)
+
     def get_ret(df, days_back=None, fixed_date=None):
         try:
             if fixed_date:
@@ -369,8 +397,21 @@ if not hist_max.empty and len(hist_max) > 1:
             color = "pos" if val >= 0 else "neg"
             return f'<span class="{color}">{val:+.2f}%</span>'
         except: return "N/A"
+
     ytd_date = datetime(datetime.now().year, 1, 1)
-    st.markdown(f"""<div class="perf-container"><div class="perf-item"><span class="perf-label">1 Day</span><span class="perf-val">{get_ret(hist_max, 2)}</span></div><div class="perf-item"><span class="perf-label">5 Days</span><span class="perf-val">{get_ret(hist_max, 6)}</span></div><div class="perf-item"><span class="perf-label">1 Month</span><span class="perf-val">{get_ret(hist_max, 22)}</span></div><div class="perf-item"><span class="perf-label">6 Months</span><span class="perf-val">{get_ret(hist_max, 126)}</span></div><div class="perf-item"><span class="perf-label">YTD</span><span class="perf-val">{get_ret(hist_max, fixed_date=ytd_date)}</span></div><div class="perf-item"><span class="perf-label">1 Year</span><span class="perf-val">{get_ret(hist_max, 252)}</span></div><div class="perf-item"><span class="perf-label">5 Years</span><span class="perf-val">{get_ret(hist_max, 1260)}</span></div><div class="perf-item"><span class="perf-label">All Time</span><span class="perf-val">{get_ret(hist_max, days_back=len(hist_max)-1)}</span></div></div>""", unsafe_allow_html=True)
+    
+    st.markdown(f"""
+    <div class="perf-container">
+        <div class="perf-item"><span class="perf-label">1 Day</span><span class="perf-val">{get_ret(hist_max, 2)}</span></div>
+        <div class="perf-item"><span class="perf-label">5 Days</span><span class="perf-val">{get_ret(hist_max, 6)}</span></div>
+        <div class="perf-item"><span class="perf-label">1 Month</span><span class="perf-val">{get_ret(hist_max, 22)}</span></div>
+        <div class="perf-item"><span class="perf-label">6 Months</span><span class="perf-val">{get_ret(hist_max, 126)}</span></div>
+        <div class="perf-item"><span class="perf-label">YTD</span><span class="perf-val">{get_ret(hist_max, fixed_date=ytd_date)}</span></div>
+        <div class="perf-item"><span class="perf-label">1 Year</span><span class="perf-val">{get_ret(hist_max, 252)}</span></div>
+        <div class="perf-item"><span class="perf-label">5 Years</span><span class="perf-val">{get_ret(hist_max, 1260)}</span></div>
+        <div class="perf-item"><span class="perf-label">All Time</span><span class="perf-val">{get_ret(hist_max, days_back=len(hist_max)-1)}</span></div>
+    </div>
+    """, unsafe_allow_html=True)
 
 st.divider()
 
@@ -394,7 +435,7 @@ with v_col_left:
     st.plotly_chart(fig_val, use_container_width=True)
 with v_col_right:
     st.metric("P/E Ratio", f"{info.get('trailingPE', 0):.1f}")
-    st.metric("PEG Ratio", f"{info.get('pegRatio', 0):.2f}")
+    st.metric("PEG Ratio", f"{peg:.2f}")
     st.metric("Graham Number", f"{graham_fv:.2f}" if graham_fv else "N/A")
 
 st.divider()
@@ -403,15 +444,12 @@ st.divider()
 st.header("Financials")
 fin_period = st.radio("Frequency:", ["Annual", "Quarterly"], horizontal=True)
 if fin_period == "Annual":
-    financials = financials.iloc[::-1]
-    balance_sheet = balance_sheet.iloc[::-1]
-    cash_flow = cash_flow.iloc[::-1]
+    financials, balance_sheet, cash_flow = stock.financials.T, stock.balance_sheet.T, stock.cashflow.T
     date_fmt = "%Y"
 else:
-    financials = stock.quarterly_financials.T.iloc[::-1]
-    balance_sheet = stock.quarterly_balance_sheet.T.iloc[::-1]
-    cash_flow = stock.quarterly_cashflow.T.iloc[::-1]
+    financials, balance_sheet, cash_flow = stock.quarterly_financials.T, stock.quarterly_balance_sheet.T, stock.quarterly_cashflow.T
     date_fmt = "%Y-%m"
+financials, balance_sheet, cash_flow = financials.iloc[::-1], balance_sheet.iloc[::-1], cash_flow.iloc[::-1]
 dates = [d.strftime(date_fmt) for d in financials.index]
 
 st.subheader("Performance")
