@@ -213,7 +213,7 @@ s, t = check(pe > 0 and pe < 35, f"P/E vs Peers Average ({pe:.1f}x < 35x)"); v_s
 s, t = check(peg > 0 and peg < 1.5, f"PEG Ratio within ideal range ({peg:.2f} < 1.5x)"); v_score+=s; v_details.append(t)
 s, t = check(current_price < analyst_fv, f"Below Analyst Target ({current_price:.2f} < {analyst_fv:.2f})"); v_score+=s; v_details.append(t)
 
-# 2. FUTURE GROWTH (6 Points) - FIXED LOGIC
+# 2. FUTURE GROWTH (6 Points)
 f_score = 0
 f_details = []
 
@@ -248,41 +248,61 @@ try:
     hist_fin = financials.sort_index()
     hist_bs = balance_sheet.sort_index()
     
-    if not hist_fin.empty and len(hist_fin) >= 2:
-        if 'Basic EPS' in hist_fin.columns: eps_series = hist_fin['Basic EPS']
+    if not hist_fin.empty:
+        # FIX: Prepare EPS Series
+        if 'Basic EPS' in hist_fin.columns: 
+            eps_series = hist_fin['Basic EPS']
         elif 'Net Income' in hist_fin.columns and 'Basic Average Shares' in hist_fin.columns:
             eps_series = hist_fin['Net Income'] / hist_fin['Basic Average Shares']
-        else: eps_series = pd.Series([0])
+        else: 
+            eps_series = pd.Series([0])
+        
+        # FIX: Remove NaN values to find true oldest EPS (Fixes IBM issue)
+        eps_series = eps_series.dropna()
 
-        curr_eps = eps_series.iloc[-1]
-        prev_eps = eps_series.iloc[-2]
-        eps_growth_1y = (curr_eps - prev_eps) / abs(prev_eps) if prev_eps != 0 else 0
-        
-        # Checks with values
-        s, t = check(eps_growth_1y > 0.12, f"EPS Growth ({eps_growth_1y*100:.1f}%) > Industry (12%)"); p_score+=s; p_details.append(t)
-        s, t = check(curr_eps > eps_series.iloc[0], f"Long Term Growth (EPS: {curr_eps:.2f} > {eps_series.iloc[0]:.2f})"); p_score+=s; p_details.append(t)
-        
-        years = len(eps_series) - 1
-        if years > 0 and eps_series.iloc[0] > 0 and curr_eps > 0:
-            cagr = (curr_eps / eps_series.iloc[0]) ** (1/years) - 1
-            s, t = check(eps_growth_1y > cagr, f"Accelerating Growth ({eps_growth_1y*100:.1f}% > {cagr*100:.1f}% Avg)"); p_score+=s; p_details.append(t)
-        else: p_details.append("❌ Accelerated Growth (Insufficient Data)")
+        if len(eps_series) >= 2:
+            curr_eps = eps_series.iloc[-1]
+            prev_eps = eps_series.iloc[-2]
+            oldest_eps = eps_series.iloc[0]
+            
+            # 1. EPS Growth vs Industry (Using 12% proxy)
+            eps_growth_1y = (curr_eps - prev_eps) / abs(prev_eps) if prev_eps != 0 else 0
+            s, t = check(eps_growth_1y > 0.12, f"EPS Growth ({eps_growth_1y*100:.1f}%) > Industry (12%)"); p_score+=s; p_details.append(t)
+            
+            # 2. Long Term Growth (Current vs Oldest available)
+            s, t = check(curr_eps > oldest_eps, f"Long Term Growth (EPS: {curr_eps:.2f} > {oldest_eps:.2f})"); p_score+=s; p_details.append(t)
+            
+            # 3. Accelerated Growth
+            years = len(eps_series) - 1
+            # FIX: Ensure oldest_eps is positive before calculating CAGR to prevent math error
+            if years > 0 and oldest_eps > 0 and curr_eps > 0:
+                cagr = (curr_eps / oldest_eps) ** (1/years) - 1
+                s, t = check(eps_growth_1y > cagr, f"Accelerating Growth ({eps_growth_1y*100:.1f}% > {cagr*100:.1f}% Avg)"); p_score+=s; p_details.append(t)
+            else:
+                p_details.append("❌ Accelerated Growth (Data requires positive historical earnings)")
 
-        s, t = check(roe > 0.20, f"High ROE ({roe*100:.1f}% > 20%)"); p_score+=s; p_details.append(t)
-        
-        def get_roce(idx):
-            try:
-                ebit = hist_fin['EBIT'].iloc[idx]
-                assets = hist_bs['Total Assets'].iloc[idx]
-                curr_liab = hist_bs['Current Liabilities'].iloc[idx]
-                return ebit / (assets - curr_liab)
-            except: return 0
-        curr_roce = get_roce(-1)
-        old_roce = get_roce(-3) if len(hist_fin) >= 3 else get_roce(0)
-        s, t = check(curr_roce > old_roce, f"ROCE Trend ({curr_roce*100:.1f}% > {old_roce*100:.1f}%)"); p_score+=s; p_details.append(t)
-        
-        roa = info.get('returnOnAssets', 0)
-        s, t = check(roa > 0.06, f"ROA ({roa*100:.1f}%) > Industry (6%)"); p_score+=s; p_details.append(t)
+            # 4. High ROE
+            s, t = check(roe > 0.20, f"High ROE ({roe*100:.1f}% > 20%)"); p_score+=s; p_details.append(t)
+            
+            # 5. ROCE Trend
+            def get_roce(idx):
+                try:
+                    ebit = hist_fin['EBIT'].iloc[idx]
+                    assets = hist_bs['Total Assets'].iloc[idx]
+                    curr_liab = hist_bs['Current Liabilities'].iloc[idx]
+                    return ebit / (assets - curr_liab)
+                except: return 0
+            
+            # Safety check for index bounds
+            curr_roce = get_roce(-1)
+            old_roce = get_roce(-3) if len(hist_fin) >= 3 else get_roce(0)
+            s, t = check(curr_roce > old_roce, f"ROCE Trend ({curr_roce*100:.1f}% > {old_roce*100:.1f}%)"); p_score+=s; p_details.append(t)
+            
+            # 6. ROA vs Industry
+            roa = info.get('returnOnAssets', 0)
+            s, t = check(roa > 0.06, f"ROA ({roa*100:.1f}%) > Industry (6%)"); p_score+=s; p_details.append(t)
+        else:
+            p_details.append("❌ Insufficient Historical Data (Need >2 years)")
     else:
         p_details.append("❌ Insufficient Historical Data")
 except Exception as e:
