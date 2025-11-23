@@ -139,6 +139,14 @@ def calc_dcf(stock, info):
         return dcf_val, growth_rate
     except: return 0, 0
 
+# --- DATA PREP: SAFE DIVIDEND YIELD ---
+# Fix: Manually calculate yield if Rate is available to avoid API format errors (e.g. 38% vs 0.38%)
+div_rate = info.get('dividendRate', 0)
+if div_rate and current_price and current_price > 0:
+    dy = div_rate / current_price
+else:
+    dy = info.get('dividendYield', 0)
+
 # --- RUN CALCULATIONS ---
 graham_fv = calc_graham(info)
 dcf_fv, dcf_growth = calc_dcf(stock, info)
@@ -184,7 +192,7 @@ if de < 50: scores["Health"] = 5
 elif de < 100: scores["Health"] = 3
 else: scores["Health"] = 1
 
-dy = info.get('dividendYield', 0)
+# Use the safe 'dy' calculated earlier
 if dy and dy > 0.02: scores["Dividend"] = 5
 elif dy: scores["Dividend"] = 3
 
@@ -238,7 +246,6 @@ if chart_type == "Short Term (Intraday)":
     # Calculate Range for latest day (7:30 to 18:00)
     if not hist_data.empty:
         last_dt = hist_data.index[-1]
-        # Construct specific times for the latest date found in data
         start_range = last_dt.replace(hour=7, minute=30, second=0, microsecond=0)
         end_range = last_dt.replace(hour=18, minute=0, second=0, microsecond=0)
 
@@ -483,7 +490,7 @@ st.divider()
 st.header("5. Dividend")
 d1, d2 = st.columns(2)
 with d1:
-    st.metric("Yield", f"{info.get('dividendYield', 0)*100:.2f}%")
+    st.metric("Yield", f"{dy*100:.2f}%")
 with d2:
     st.metric("Payout Ratio", f"{info.get('payoutRatio', 0)*100:.0f}%")
 
