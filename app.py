@@ -43,14 +43,13 @@ st.markdown("""
     .pos { color: #00d09c; }
     .neg { color: #ff6384; }
     
-    /* Mobile adjustment for grid */
     @media (max-width: 800px) {
         .perf-container { grid-template-columns: repeat(4, 1fr); gap: 15px; }
     }
     </style>
 """, unsafe_allow_html=True)
 
-# --- SEARCH FUNCTION (YAHOO AUTO-COMPLETE) ---
+# --- SEARCH FUNCTION ---
 @st.cache_data(ttl=3600)
 def search_symbol(query):
     if not query: return []
@@ -240,19 +239,46 @@ else:
     buttons = list([dict(count=1, label="1m", step="month", stepmode="backward"), dict(count=6, label="6m", step="month", stepmode="backward"), dict(count=1, label="YTD", step="year", stepmode="todate"), dict(count=1, label="1y", step="year", stepmode="backward"), dict(count=5, label="5y", step="year", stepmode="backward"), dict(step="all", label="MAX")])
     line_color = '#00d09c'
 
-# 2. GRAPH RENDER
+# 2. GRAPH RENDER (Interactive)
 if not hist_data.empty:
     fig_price = go.Figure()
-    fig_price.add_trace(go.Scatter(x=hist_data.index, y=hist_data['Close'], mode='lines', name='Close', line=dict(color=line_color, width=2), fill='tozeroy', fillcolor=f"rgba({int(line_color[1:3], 16)}, {int(line_color[3:5], 16)}, {int(line_color[5:7], 16)}, 0.1)"))
-    fig_price.update_xaxes(rangeslider_visible=True, rangeselector=dict(buttons=buttons, bgcolor="#2c3542", activecolor=line_color, font=dict(color="white")))
-    fig_price.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), xaxis=dict(gridcolor='#36404e'), yaxis=dict(gridcolor='#36404e'), height=400, margin=dict(l=0, r=0))
+    
+    fig_price.add_trace(go.Scatter(
+        x=hist_data.index, 
+        y=hist_data['Close'],
+        mode='lines',
+        name='Close',
+        line=dict(color=line_color, width=2),
+        fill='tozeroy',
+        fillcolor=f"rgba({int(line_color[1:3], 16)}, {int(line_color[3:5], 16)}, {int(line_color[5:7], 16)}, 0.1)"
+    ))
+
+    fig_price.update_xaxes(
+        rangeslider_visible=True,
+        rangeselector=dict(buttons=buttons, bgcolor="#2c3542", activecolor=line_color, font=dict(color="white")),
+        showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='solid', spikecolor="#ffffff", spikethickness=1
+    )
+    
+    fig_price.update_yaxes(
+        showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='dash', spikecolor="#ffffff", spikethickness=1
+    )
+
+    fig_price.update_layout(
+        paper_bgcolor='rgba(0,0,0,0)', 
+        plot_bgcolor='rgba(0,0,0,0)', 
+        font=dict(color='white'),
+        xaxis=dict(gridcolor='#36404e'), 
+        yaxis=dict(gridcolor='#36404e'),
+        height=400,
+        margin=dict(l=0, r=0),
+        hovermode="x unified",
+        hoverlabel=dict(bgcolor="#2c3542", font_size=14, font_family="Segoe UI")
+    )
     st.plotly_chart(fig_price, use_container_width=True)
 else:
     st.write("Historical price data unavailable.")
 
-# 3. PERCENTAGE RETURNS (PERFORMANCE STRIP)
-# We need 'max' daily history to calculate these, regardless of what chart is shown above.
-# If chart_type is already long term, reuse it. If short term, fetch max separately.
+# 3. PERCENTAGE RETURNS
 if chart_type == "Short Term (Intraday)":
     hist_max = stock.history(period="max", interval="1d")
 else:
@@ -261,55 +287,31 @@ else:
 if not hist_max.empty and len(hist_max) > 1:
     curr = hist_max['Close'].iloc[-1]
     
-    # Helper to calculate % change
     def get_ret(df, days_back=None, fixed_date=None):
         try:
             if fixed_date:
-                # Find closest available date to fixed_date
                 idx = df.index.get_indexer([pd.to_datetime(fixed_date)], method='nearest')[0]
                 past_price = df['Close'].iloc[idx]
             else:
-                # Trading days approximation
                 if len(df) < days_back: return "N/A"
                 past_price = df['Close'].iloc[-days_back]
-            
             val = ((curr - past_price) / past_price) * 100
             color = "pos" if val >= 0 else "neg"
             return f'<span class="{color}">{val:+.2f}%</span>'
-        except:
-            return "N/A"
+        except: return "N/A"
 
-    # YTD Logic
     ytd_date = datetime(datetime.now().year, 1, 1)
     
-    # Trading Day Calculations (approx)
-    ret_1d = get_ret(hist_max, 2) # Previous close
-    ret_5d = get_ret(hist_max, 6) # 1 week
-    ret_1m = get_ret(hist_max, 22) # 1 month
-    ret_6m = get_ret(hist_max, 126) # 6 months
-    ret_ytd = get_ret(hist_max, fixed_date=ytd_date)
-    ret_1y = get_ret(hist_max, 252) # 1 year
-    ret_5y = get_ret(hist_max, 1260) # 5 years
-    
-    # All Time
-    try:
-        start_price = hist_max['Close'].iloc[0]
-        all_val = ((curr - start_price) / start_price) * 100
-        all_col = "pos" if all_val >= 0 else "neg"
-        ret_all = f'<span class="{all_col}">{all_val:+.2f}%</span>'
-    except: ret_all = "N/A"
-
-    # HTML Grid for the strip
     st.markdown(f"""
     <div class="perf-container">
-        <div class="perf-item"><span class="perf-label">1 Day</span><span class="perf-val">{ret_1d}</span></div>
-        <div class="perf-item"><span class="perf-label">5 Days</span><span class="perf-val">{ret_5d}</span></div>
-        <div class="perf-item"><span class="perf-label">1 Month</span><span class="perf-val">{ret_1m}</span></div>
-        <div class="perf-item"><span class="perf-label">6 Months</span><span class="perf-val">{ret_6m}</span></div>
-        <div class="perf-item"><span class="perf-label">Year to Date</span><span class="perf-val">{ret_ytd}</span></div>
-        <div class="perf-item"><span class="perf-label">1 Year</span><span class="perf-val">{ret_1y}</span></div>
-        <div class="perf-item"><span class="perf-label">5 Years</span><span class="perf-val">{ret_5y}</span></div>
-        <div class="perf-item"><span class="perf-label">All Time</span><span class="perf-val">{ret_all}</span></div>
+        <div class="perf-item"><span class="perf-label">1 Day</span><span class="perf-val">{get_ret(hist_max, 2)}</span></div>
+        <div class="perf-item"><span class="perf-label">5 Days</span><span class="perf-val">{get_ret(hist_max, 6)}</span></div>
+        <div class="perf-item"><span class="perf-label">1 Month</span><span class="perf-val">{get_ret(hist_max, 22)}</span></div>
+        <div class="perf-item"><span class="perf-label">6 Months</span><span class="perf-val">{get_ret(hist_max, 126)}</span></div>
+        <div class="perf-item"><span class="perf-label">YTD</span><span class="perf-val">{get_ret(hist_max, fixed_date=ytd_date)}</span></div>
+        <div class="perf-item"><span class="perf-label">1 Year</span><span class="perf-val">{get_ret(hist_max, 252)}</span></div>
+        <div class="perf-item"><span class="perf-label">5 Years</span><span class="perf-val">{get_ret(hist_max, 1260)}</span></div>
+        <div class="perf-item"><span class="perf-label">All Time</span><span class="perf-val">{get_ret(hist_max, days_back=len(hist_max)-1)}</span></div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -358,8 +360,12 @@ if not financials.empty:
     net_inc = financials.get('Net Income', [])
     if len(rev) > 0:
         fig_perf = go.Figure()
-        fig_perf.add_trace(go.Bar(x=dates, y=rev, name='Revenue', marker_color='#36a2eb'))
-        fig_perf.add_trace(go.Bar(x=dates, y=net_inc, name='Net Income', marker_color='#00d09c'))
+        # Create text lists for bars
+        text_rev = [f"{x/1e9:.1f}B" for x in rev]
+        text_inc = [f"{x/1e9:.1f}B" for x in net_inc]
+        
+        fig_perf.add_trace(go.Bar(x=dates, y=rev, name='Revenue', marker_color='#36a2eb', text=text_rev, textposition='auto'))
+        fig_perf.add_trace(go.Bar(x=dates, y=net_inc, name='Net Income', marker_color='#00d09c', text=text_inc, textposition='auto'))
         fig_perf.update_layout(barmode='group', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'))
         st.plotly_chart(fig_perf, use_container_width=True)
         
@@ -373,7 +379,7 @@ if not financials.empty:
     op_exp = latest.get('Operating Expense', 0)
     net_val = latest.get('Net Income', 0)
     other_exp = rev_val - cost_rev - op_exp - net_val
-    fig_water = go.Figure(go.Waterfall(orientation = "v", measure = ["relative", "relative", "total", "relative", "relative", "total"], x = ["Revenue", "COGS", "Gross Profit", "Op Expenses", "Other", "Net Income"], textposition = "outside", text = [f"{rev_val/1e9:.1f}B", f"-{cost_rev/1e9:.1f}B", f"{gross_profit/1e9:.1f}B", f"-{op_exp/1e9:.1f}B", f"-{other_exp/1e9:.1f}B", f"{net_val/1e9:.1f}B"], y = [rev_val, -cost_rev, gross_profit, -op_exp, -other_exp, net_val], connector = {"line":{"color":"white"}}, decreasing = {"marker":{"color":"#ff6384"}}, increasing = {"marker":{"color":"#00d09c"}}, totals = {"marker":{"color":"#36a2eb"}}))
+    fig_water = go.Figure(go.Waterfall(orientation = "v", measure = ["relative", "relative", "total", "relative", "relative", "total"], x = ["Revenue", "COGS", "Gross Profit", "Op Expenses", "Other", "Net Income"], textposition = "auto", text = [f"{rev_val/1e9:.1f}B", f"-{cost_rev/1e9:.1f}B", f"{gross_profit/1e9:.1f}B", f"-{op_exp/1e9:.1f}B", f"-{other_exp/1e9:.1f}B", f"{net_val/1e9:.1f}B"], y = [rev_val, -cost_rev, gross_profit, -op_exp, -other_exp, net_val], connector = {"line":{"color":"white"}}, decreasing = {"marker":{"color":"#ff6384"}}, increasing = {"marker":{"color":"#00d09c"}}, totals = {"marker":{"color":"#36a2eb"}}))
     fig_water.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), yaxis=dict(showgrid=True, gridcolor='#36404e'))
     st.plotly_chart(fig_water, use_container_width=True)
 
@@ -384,10 +390,16 @@ if not balance_sheet.empty and not cash_flow.empty:
     bs_align, cf_align = balance_sheet.loc[common_idx], cash_flow.loc[common_idx]
     d_dates = [d.strftime(date_fmt) for d in common_idx]
     debt, cash, fcf = bs_align.get('Total Debt', []), bs_align.get('Cash And Cash Equivalents', []), cf_align.get('Free Cash Flow', [])
+    
+    # Text
+    t_d = [f"{x/1e9:.1f}B" for x in debt]
+    t_c = [f"{x/1e9:.1f}B" for x in cash]
+    t_f = [f"{x/1e9:.1f}B" for x in fcf]
+    
     fig_debt = go.Figure()
-    fig_debt.add_trace(go.Bar(x=d_dates, y=debt, name='Total Debt', marker_color='#ff6384'))
-    fig_debt.add_trace(go.Bar(x=d_dates, y=fcf, name='Free Cash Flow', marker_color='#00d09c'))
-    fig_debt.add_trace(go.Bar(x=d_dates, y=cash, name='Cash', marker_color='#36a2eb'))
+    fig_debt.add_trace(go.Bar(x=d_dates, y=debt, name='Total Debt', marker_color='#ff6384', text=t_d, textposition='auto'))
+    fig_debt.add_trace(go.Bar(x=d_dates, y=fcf, name='Free Cash Flow', marker_color='#00d09c', text=t_f, textposition='auto'))
+    fig_debt.add_trace(go.Bar(x=d_dates, y=cash, name='Cash', marker_color='#36a2eb', text=t_c, textposition='auto'))
     fig_debt.update_layout(barmode='group', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), yaxis=dict(showgrid=True, gridcolor='#36404e'), legend=dict(orientation="h", y=1.1))
     st.plotly_chart(fig_debt, use_container_width=True)
 
