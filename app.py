@@ -250,7 +250,9 @@ if not hist_data.empty:
         name='Close',
         line=dict(color=line_color, width=2),
         fill='tozeroy',
-        fillcolor=f"rgba({int(line_color[1:3], 16)}, {int(line_color[3:5], 16)}, {int(line_color[5:7], 16)}, 0.1)"
+        fillcolor=f"rgba({int(line_color[1:3], 16)}, {int(line_color[3:5], 16)}, {int(line_color[5:7], 16)}, 0.1)",
+        # Cleaned up hover template (Fixes overlap issues)
+        hovertemplate = '<b>Date:</b> %{x|%b %d, %Y}<br><b>Price:</b> %{y:.2f}<extra></extra>'
     ))
 
     fig_price.update_xaxes(
@@ -287,9 +289,13 @@ else:
 if not hist_max.empty and len(hist_max) > 1:
     curr = hist_max['Close'].iloc[-1]
     
+    # Pre-process: Drop Timezone info to fix "N/A" on YTD calculations
+    hist_max.index = hist_max.index.tz_localize(None)
+
     def get_ret(df, days_back=None, fixed_date=None):
         try:
             if fixed_date:
+                # Calculate index for fixed date (timezone naive)
                 idx = df.index.get_indexer([pd.to_datetime(fixed_date)], method='nearest')[0]
                 past_price = df['Close'].iloc[idx]
             else:
