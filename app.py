@@ -24,11 +24,29 @@ st.markdown("""
     .news-meta { color: #8c97a7; font-size: 0.85em; }
     div[data-baseweb="select"] > div { background-color: #2c3542; color: white; border-color: #444; }
     
+    /* Timeframe Buttons - Centered and Styled */
+    div[data-testid="stRadio"] > div { 
+        display: flex; 
+        justify-content: center; /* Center the buttons */
+        gap: 10px; 
+        width: 100%;
+    }
+    div[data-testid="stRadio"] label {
+        background-color: #232b36;
+        padding: 5px 20px;
+        border-radius: 5px;
+        border: 1px solid #36404e;
+        cursor: pointer;
+        flex-grow: 1; /* Make them stretch slightly */
+        text-align: center;
+    }
+    div[data-testid="stRadio"] label:hover { border-color: #00d09c; color: #00d09c; }
+
     .perf-container {
         display: grid;
         grid-template-columns: repeat(8, 1fr);
         gap: 10px;
-        margin-top: 10px;
+        margin-top: 5px;
         margin-bottom: 20px;
         background-color: #232b36;
         padding: 15px;
@@ -297,7 +315,7 @@ try:
     curr_liab = get_val(balance_sheet, ['Current Liabilities', 'Total Current Liabilities'])
     total_liab = get_val(balance_sheet, ['Total Liabilities Net Minority Interest', 'Total Liabilities'])
     
-    # Improved Debt Fetching (Sum if Total Missing)
+    # Use robust debt fetch
     total_debt = get_debt(balance_sheet)
 
     equity = get_val(balance_sheet, ['Stockholders Equity', 'Total Stockholder Equity', 'Total Equity Gross Minority Interest'])
@@ -318,15 +336,11 @@ try:
     s, t = check((de_ratio < 0.40) or (cash_bs > total_debt), f"Safe Debt Level (D/E: {de_ratio*100:.0f}% < 40% or Cash > Debt)"); h_score+=s; h_details.append(t)
     
     if len(balance_sheet.columns) > 1:
-        # Robust Debt Fetching for Previous Year
         prev_df = pd.DataFrame(balance_sheet.iloc[:, 1])
         prev_debt = get_debt(prev_df)
         prev_eq = get_val(prev_df, ['Stockholders Equity', 'Total Stockholder Equity'])
-        
-        if prev_eq != 0:
-            prev_de = prev_debt / prev_eq
-            s, t = check(de_ratio < prev_de, f"Reducing Debt ({de_ratio*100:.0f}% < {prev_de*100:.0f}%)"); h_score+=s; h_details.append(t)
-        else: h_details.append("❌ Reducing Debt (Insufficient Data)")
+        prev_de = prev_debt / prev_eq if prev_eq != 0 else 999
+        s, t = check(de_ratio < prev_de, f"Reducing Debt ({de_ratio*100:.0f}% < {prev_de*100:.0f}%)"); h_score+=s; h_details.append(t)
     else: h_details.append("❌ Reducing Debt (Insufficient Data)")
 
     if total_debt > 0: s, t = check(ocf > (total_debt * 0.2), f"Debt Coverage (OCF {fmt_num(ocf)} > 20% of Debt)")
@@ -417,6 +431,11 @@ st.divider()
 
 # --- PRICE HISTORY & RETURNS ---
 st.header("Price History")
+
+# 1. Placeholder for the Graph
+chart_placeholder = st.empty()
+
+# 2. Selectors below graph
 timeframe = st.radio("Timeframe", ['1D', '5D', '1M', '6M', 'YTD', '1Y', '5Y', 'Max'], horizontal=True, label_visibility="collapsed")
 
 start_range = None
@@ -439,21 +458,28 @@ elif timeframe == 'Max': chart_data = stock.history(period='max', interval='1d')
 
 perf_data = stock.history(period="max", interval="1d")
 
+# 3. GRAPH RENDER (Push to placeholder)
 if not chart_data.empty:
     y_min = chart_data['Close'].min()
     y_max = chart_data['Close'].max()
     y_buffer = (y_max - y_min) * 0.05 if y_max != y_min else y_max * 0.01
     y_range = [y_min - y_buffer, y_max + y_buffer]
+    
     fig_price = go.Figure()
     fig_price.add_trace(go.Scatter(x=chart_data.index, y=chart_data['Close'], mode='lines', name='Close', line=dict(color='#36a2eb' if timeframe in ['1D', '5D'] else '#00d09c', width=2), fill='tozeroy', fillcolor=f"rgba(0, 208, 156, 0.1)" if timeframe not in ['1D', '5D'] else "rgba(54, 162, 235, 0.1)", hovertemplate = '<b>Date:</b> %{x|%b %d, %H:%M}<br><b>Price:</b> %{y:.2f}<extra></extra>'))
+    
     xaxis_args = dict(showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='solid', spikecolor="#ffffff", spikethickness=1, gridcolor='#36404e')
     if timeframe == '1D' and start_range and end_range: xaxis_args['range'] = [start_range, end_range]
+    
     fig_price.update_xaxes(**xaxis_args)
     fig_price.update_yaxes(range=y_range, showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='dash', spikecolor="#ffffff", spikethickness=1, gridcolor='#36404e')
     fig_price.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), height=400, margin=dict(l=0, r=0), hovermode="x unified", hoverlabel=dict(bgcolor="#2c3542", font_size=14, font_family="Segoe UI"))
-    st.plotly_chart(fig_price, use_container_width=True)
-else: st.write("Price data unavailable for this timeframe.")
+    
+    chart_placeholder.plotly_chart(fig_price, use_container_width=True)
+else:
+    chart_placeholder.write("Price data unavailable for this timeframe.")
 
+# 4. PERFORMANCE STRIP (Bottom)
 if not perf_data.empty and len(perf_data) > 1:
     curr = perf_data['Close'].iloc[-1]
     if perf_data.index.tz is not None: perf_data.index = perf_data.index.tz_localize(None)
