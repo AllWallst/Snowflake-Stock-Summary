@@ -24,18 +24,6 @@ st.markdown("""
     .news-meta { color: #8c97a7; font-size: 0.85em; }
     div[data-baseweb="select"] > div { background-color: #2c3542; color: white; border-color: #444; }
     
-    /* Timeframe Buttons */
-    div[data-testid="stRadio"] > div { display: flex; justify-content: flex-start; gap: 0px; }
-    div[data-testid="stRadio"] label {
-        background-color: #232b36;
-        padding: 5px 15px;
-        border-radius: 5px;
-        border: 1px solid #36404e;
-        margin-right: 5px;
-        cursor: pointer;
-    }
-    div[data-testid="stRadio"] label:hover { border-color: #00d09c; color: #00d09c; }
-
     .perf-container {
         display: grid;
         grid-template-columns: repeat(8, 1fr);
@@ -229,11 +217,17 @@ s, t = check(current_price < analyst_fv, f"Below Analyst Target ({current_price:
 # 2. FUTURE GROWTH (6 Points)
 f_score = 0
 f_details = []
+
 f_eps = info.get('forwardEps', 0) or 0
 t_eps = info.get('trailingEps', 0) or 0
-if peg > 0 and pe > 0: g_rate = (pe / peg) / 100
-elif f_eps > 0 and t_eps > 0: g_rate = (f_eps - t_eps) / t_eps
-else: g_rate = info.get('earningsGrowth', 0) or 0
+
+if peg > 0 and pe > 0:
+    g_rate = (pe / peg) / 100
+elif f_eps > 0 and t_eps > 0:
+    g_rate = (f_eps - t_eps) / t_eps
+else:
+    g_rate = info.get('earningsGrowth', 0) or 0
+
 rev_g = info.get('revenueGrowth', 0) or 0
 
 s, t = check(g_rate > 0.02, f"Earnings Growth ({g_rate*100:.1f}%) > Savings Rate (2%)"); f_score+=s; f_details.append(t)
@@ -249,6 +243,7 @@ p_details = []
 try:
     hist_fin = financials.sort_index()
     hist_bs = balance_sheet.sort_index()
+    
     if not hist_fin.empty and len(hist_fin) >= 2:
         if 'Basic EPS' in hist_fin.columns: eps_series = hist_fin['Basic EPS']
         elif 'Net Income' in hist_fin.columns and 'Basic Average Shares' in hist_fin.columns:
@@ -261,16 +256,13 @@ try:
             prev_eps = eps_series.iloc[-2]
             oldest_eps = eps_series.iloc[0]
             eps_growth_1y = (curr_eps - prev_eps) / abs(prev_eps) if prev_eps != 0 else 0
-            
             s, t = check(eps_growth_1y > 0.12, f"EPS Growth ({eps_growth_1y*100:.1f}%) > Industry (12%)"); p_score+=s; p_details.append(t)
             s, t = check(curr_eps > oldest_eps, f"Long Term Growth (EPS: {curr_eps:.2f} > {oldest_eps:.2f})"); p_score+=s; p_details.append(t)
-            
             years = len(eps_series) - 1
             if years > 0 and oldest_eps > 0 and curr_eps > 0:
                 cagr = (curr_eps / oldest_eps) ** (1/years) - 1
                 s, t = check(eps_growth_1y > cagr, f"Accelerating Growth ({eps_growth_1y*100:.1f}% > {cagr*100:.1f}% Avg)"); p_score+=s; p_details.append(t)
             else: p_details.append("❌ Accelerated Growth (Data requires positive historical earnings)")
-            
             s, t = check(roe > 0.20, f"High ROE ({roe*100:.1f}% > 20%)"); p_score+=s; p_details.append(t)
             def get_roce(idx):
                 try:
@@ -360,11 +352,15 @@ try:
     s, t = check(cf_cover, f"Cash Flow Coverage (Div: {fmt_num(div_paid)} < FCF: {fmt_num(fcf)})"); d_score+=s; d_details.append(t)
 except: d_details.append("❌ Cash Flow Coverage (Data Unavailable)")
 
-final_scores = [(s/6)*5 for s in [v_score, f_score, p_score, h_score, d_score]]
-total_raw_score = sum([v_score, f_score, p_score, h_score, d_score])
+# Final Raw Scores (0-6)
+final_scores = [v_score, f_score, p_score, h_score, d_score]
+
+# Color Logic
+total_raw_score = sum(final_scores)
 if total_raw_score < 12: flake_color = "#ff4b4b"
 elif total_raw_score < 20: flake_color = "#ffb300"
 else: flake_color = "#00d09c"
+
 def hex_to_rgba(h, alpha): return tuple(int(h.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)) + (alpha,)
 fill_rgba = f"rgba{hex_to_rgba(flake_color, 0.4)}"
 
@@ -381,11 +377,49 @@ with col1:
     m3.metric("Beta", f"{info.get('beta', 0):.2f}")
     m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
 with col2:
+    # --- SNOWFLAKE CHART ---
+    # Repeat first value to close the loop
     r_vals = final_scores + [final_scores[0]]
     theta_vals = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
-    fig = go.Figure(data=go.Scatterpolar(r=r_vals, theta=theta_vals, fill='toself', line_shape='spline', line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', text=[f"{s:.1f}/6" for s in [v_score, f_score, p_score, h_score, d_score, v_score]], marker=dict(size=5)))
-    fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 6], showticklabels=False, gridcolor='#444', gridwidth=1.5, layer='below traces'), angularaxis=dict(direction='clockwise', rotation=90, gridcolor='rgba(0,0,0,0)', tickfont=dict(color='white', size=12)), bgcolor='#232b36'), paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=30, b=30, l=30, r=30), showlegend=False, height=300)
+    
+    fig = go.Figure(data=go.Scatterpolar(
+        r=r_vals,
+        theta=theta_vals,
+        fill='toself',
+        line_shape='spline', 
+        line_color=flake_color,
+        fillcolor=fill_rgba,
+        hoverinfo='text',
+        text=[f"{s}/6" for s in r_vals],
+        marker=dict(size=5)
+    ))
+    
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                range=[0, 6],
+                tickvals=[1, 2, 3, 4, 5, 6],
+                showticklabels=False,
+                gridcolor='#444', 
+                gridwidth=1.5,
+                layer='below traces'
+            ),
+            angularaxis=dict(
+                direction='clockwise', 
+                rotation=90,           
+                gridcolor='rgba(0,0,0,0)', 
+                tickfont=dict(color='white', size=12)
+            ),
+            bgcolor='#232b36'
+        ),
+        paper_bgcolor='rgba(0,0,0,0)',
+        margin=dict(t=30, b=30, l=30, r=30),
+        showlegend=False,
+        height=300
+    )
     st.plotly_chart(fig, use_container_width=True)
+    
     with st.expander("📊 See Analysis Breakdown"):
         tab1, tab2, tab3, tab4, tab5 = st.tabs(["Value", "Future", "Past", "Health", "Dividend"])
         with tab1:
@@ -408,46 +442,85 @@ st.divider()
 
 # --- PRICE HISTORY & RETURNS ---
 st.header("Price History")
-timeframe = st.radio("Timeframe", ['1D', '5D', '1M', '6M', 'YTD', '1Y', '5Y', 'Max'], horizontal=True, label_visibility="collapsed")
+
+chart_type = st.radio("Select Timeframe:", ["Long Term (Daily)", "Short Term (Intraday)"], horizontal=True, label_visibility="collapsed")
 
 start_range = None
 end_range = None
 chart_data = pd.DataFrame()
 
-if timeframe == '1D':
-    chart_data = stock.history(period='1d', interval='5m', prepost=True)
+if chart_type == "Short Term (Intraday)":
+    # Fetch 1 day data (most recent trading day)
+    chart_data = stock.history(period="1d", interval="5m", prepost=True)
+    
+    # Determine date
     if not chart_data.empty:
         last_dt = chart_data.index[-1]
+        # Force 7:30 AM - 6:00 PM view for that specific day
         start_range = last_dt.replace(hour=7, minute=30, second=0, microsecond=0)
         end_range = last_dt.replace(hour=18, minute=0, second=0, microsecond=0)
-elif timeframe == '5D': chart_data = stock.history(period='5d', interval='15m', prepost=True)
-elif timeframe == '1M': chart_data = stock.history(period='1mo', interval='1d')
-elif timeframe == '6M': chart_data = stock.history(period='6mo', interval='1d')
-elif timeframe == 'YTD': chart_data = stock.history(period='ytd', interval='1d')
-elif timeframe == '1Y': chart_data = stock.history(period='1y', interval='1d')
-elif timeframe == '5Y': chart_data = stock.history(period='5y', interval='1d')
-elif timeframe == 'Max': chart_data = stock.history(period='max', interval='1d')
-
-perf_data = stock.history(period="max", interval="1d")
+    
+    buttons = list([
+        dict(count=1, label="1d", step="day", stepmode="backward"),
+        dict(step="all", label="Full Session")
+    ])
+    line_color = '#36a2eb'
+else:
+    # Default View
+    chart_data = stock.history(period="max", interval="1d")
+    buttons = list([
+        dict(count=1, label="1m", step="month", stepmode="backward"),
+        dict(count=6, label="6m", step="month", stepmode="backward"),
+        dict(count=1, label="YTD", step="year", stepmode="todate"),
+        dict(count=1, label="1y", step="year", stepmode="backward"),
+        dict(count=5, label="5y", step="year", stepmode="backward"),
+        dict(step="all", label="MAX")
+    ])
+    line_color = '#00d09c'
 
 if not chart_data.empty:
+    # Dynamic Y-Axis Calculation
     y_min = chart_data['Close'].min()
     y_max = chart_data['Close'].max()
     y_buffer = (y_max - y_min) * 0.05 if y_max != y_min else y_max * 0.01
     y_range = [y_min - y_buffer, y_max + y_buffer]
+
     fig_price = go.Figure()
-    fig_price.add_trace(go.Scatter(x=chart_data.index, y=chart_data['Close'], mode='lines', name='Close', line=dict(color='#36a2eb' if timeframe in ['1D', '5D'] else '#00d09c', width=2), fill='tozeroy', fillcolor=f"rgba(0, 208, 156, 0.1)" if timeframe not in ['1D', '5D'] else "rgba(54, 162, 235, 0.1)", hovertemplate = '<b>Date:</b> %{x|%b %d, %H:%M}<br><b>Price:</b> %{y:.2f}<extra></extra>'))
-    xaxis_args = dict(showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='solid', spikecolor="#ffffff", spikethickness=1, gridcolor='#36404e')
-    if timeframe == '1D' and start_range and end_range: xaxis_args['range'] = [start_range, end_range]
+    fig_price.add_trace(go.Scatter(
+        x=chart_data.index, y=chart_data['Close'], mode='lines', name='Close',
+        line=dict(color=line_color, width=2),
+        fill='tozeroy', fillcolor=f"rgba({int(line_color[1:3], 16)}, {int(line_color[3:5], 16)}, {int(line_color[5:7], 16)}, 0.1)",
+        hovertemplate = '<b>Date:</b> %{x|%b %d, %H:%M}<br><b>Price:</b> %{y:.2f}<extra></extra>'
+    ))
+    
+    xaxis_args = dict(
+        rangeslider_visible=True,
+        rangeselector=dict(buttons=buttons, bgcolor="#2c3542", activecolor=line_color, font=dict(color="white")),
+        showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='solid', spikecolor="#ffffff", spikethickness=1,
+        gridcolor='#36404e'
+    )
+    
+    # Apply specific range constraint ONLY for intraday
+    if chart_type == "Short Term (Intraday)" and start_range and end_range:
+        xaxis_args['range'] = [start_range, end_range]
+
     fig_price.update_xaxes(**xaxis_args)
-    fig_price.update_yaxes(range=y_range, showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='dash', spikecolor="#ffffff", spikethickness=1, gridcolor='#36404e')
+    fig_price.update_yaxes(
+        range=y_range, # Apply dynamic scaling
+        showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='dash', spikecolor="#ffffff", spikethickness=1, 
+        gridcolor='#36404e'
+    )
     fig_price.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), height=400, margin=dict(l=0, r=0), hovermode="x unified", hoverlabel=dict(bgcolor="#2c3542", font_size=14, font_family="Segoe UI"))
     st.plotly_chart(fig_price, use_container_width=True)
-else: st.write("Price data unavailable for this timeframe.")
+else:
+    st.write("Price data unavailable.")
 
-if not perf_data.empty and len(perf_data) > 1:
-    curr = perf_data['Close'].iloc[-1]
-    if perf_data.index.tz is not None: perf_data.index = perf_data.index.tz_localize(None)
+# 3. PERCENTAGE RETURNS
+# Use MAX daily history for the strip calculations
+hist_max = stock.history(period="max", interval="1d")
+if not hist_max.empty and len(hist_max) > 1:
+    curr = hist_max['Close'].iloc[-1]
+    hist_max.index = hist_max.index.tz_localize(None)
     def get_ret(df, days_back=None, fixed_date=None):
         try:
             if fixed_date:
@@ -461,7 +534,7 @@ if not perf_data.empty and len(perf_data) > 1:
             return f'<span class="{color}">{val:+.2f}%</span>'
         except: return "N/A"
     ytd_date = datetime(datetime.now().year, 1, 1)
-    st.markdown(f"""<div class="perf-container"><div class="perf-item"><span class="perf-label">1 Day</span><span class="perf-val">{get_ret(perf_data, 2)}</span></div><div class="perf-item"><span class="perf-label">5 Days</span><span class="perf-val">{get_ret(perf_data, 6)}</span></div><div class="perf-item"><span class="perf-label">1 Month</span><span class="perf-val">{get_ret(perf_data, 22)}</span></div><div class="perf-item"><span class="perf-label">6 Months</span><span class="perf-val">{get_ret(perf_data, 126)}</span></div><div class="perf-item"><span class="perf-label">YTD</span><span class="perf-val">{get_ret(perf_data, fixed_date=ytd_date)}</span></div><div class="perf-item"><span class="perf-label">1 Year</span><span class="perf-val">{get_ret(perf_data, 252)}</span></div><div class="perf-item"><span class="perf-label">5 Years</span><span class="perf-val">{get_ret(perf_data, 1260)}</span></div><div class="perf-item"><span class="perf-label">All Time</span><span class="perf-val">{get_ret(perf_data, days_back=len(perf_data)-1)}</span></div></div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="perf-container"><div class="perf-item"><span class="perf-label">1 Day</span><span class="perf-val">{get_ret(hist_max, 2)}</span></div><div class="perf-item"><span class="perf-label">5 Days</span><span class="perf-val">{get_ret(hist_max, 6)}</span></div><div class="perf-item"><span class="perf-label">1 Month</span><span class="perf-val">{get_ret(hist_max, 22)}</span></div><div class="perf-item"><span class="perf-label">6 Months</span><span class="perf-val">{get_ret(hist_max, 126)}</span></div><div class="perf-item"><span class="perf-label">YTD</span><span class="perf-val">{get_ret(hist_max, fixed_date=ytd_date)}</span></div><div class="perf-item"><span class="perf-label">1 Year</span><span class="perf-val">{get_ret(hist_max, 252)}</span></div><div class="perf-item"><span class="perf-label">5 Years</span><span class="perf-val">{get_ret(hist_max, 1260)}</span></div><div class="perf-item"><span class="perf-label">All Time</span><span class="perf-val">{get_ret(hist_max, days_back=len(hist_max)-1)}</span></div></div>""", unsafe_allow_html=True)
 
 st.divider()
 
@@ -528,6 +601,7 @@ if not financials.empty:
     op_exp = get_val(financials, ['Operating Expense'])
     net_val = get_val(financials, ['Net Income'])
     other_exp = rev_val - cost_rev - op_exp - net_val
+    
     fig_water = go.Figure(go.Waterfall(orientation = "v", measure = ["relative", "relative", "total", "relative", "relative", "total"], x = ["Revenue", "COGS", "Gross Profit", "Op Expenses", "Other", "Net Income"], textposition = "auto", text = [f"{rev_val/1e9:.1f}B", f"-{cost_rev/1e9:.1f}B", f"{gross_profit/1e9:.1f}B", f"-{op_exp/1e9:.1f}B", f"-{other_exp/1e9:.1f}B", f"{net_val/1e9:.1f}B"], y = [rev_val, -cost_rev, gross_profit, -op_exp, -other_exp, net_val], connector = {"line":{"color":"white"}}, decreasing = {"marker":{"color":"#ff6384"}}, increasing = {"marker":{"color":"#00d09c"}}, totals = {"marker":{"color":"#36a2eb"}}))
     fig_water.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), yaxis=dict(showgrid=True, gridcolor='#36404e'))
     st.plotly_chart(fig_water, use_container_width=True)
@@ -538,12 +612,15 @@ if not balance_sheet.empty and not cash_flow.empty:
     common_idx = balance_sheet.index.intersection(cash_flow.index)
     bs_align, cf_align = balance_sheet.loc[common_idx], cash_flow.loc[common_idx]
     d_dates = [d.strftime(date_fmt) for d in common_idx]
+    
     debt = [get_val(pd.DataFrame(bs_align.iloc[[i]]), ['Total Debt']) for i in range(len(bs_align))]
     cash = [get_val(pd.DataFrame(bs_align.iloc[[i]]), ['Cash And Cash Equivalents', 'Cash', 'Cash Financial']) for i in range(len(bs_align))]
     fcf = [get_val(pd.DataFrame(cf_align.iloc[[i]]), ['Free Cash Flow']) for i in range(len(cf_align))]
+
     t_d = [f"{x/1e9:.1f}B" for x in debt]
     t_c = [f"{x/1e9:.1f}B" for x in cash]
     t_f = [f"{x/1e9:.1f}B" for x in fcf]
+    
     fig_debt = go.Figure()
     fig_debt.add_trace(go.Bar(x=d_dates, y=debt, name='Total Debt', marker_color='#ff6384', text=t_d, textposition='auto'))
     fig_debt.add_trace(go.Bar(x=d_dates, y=fcf, name='Free Cash Flow', marker_color='#00d09c', text=t_f, textposition='auto'))
