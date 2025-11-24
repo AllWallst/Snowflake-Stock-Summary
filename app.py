@@ -24,18 +24,6 @@ st.markdown("""
     .news-meta { color: #8c97a7; font-size: 0.85em; }
     div[data-baseweb="select"] > div { background-color: #2c3542; color: white; border-color: #444; }
     
-    /* Timeframe Buttons */
-    div[data-testid="stRadio"] > div { display: flex; justify-content: flex-start; gap: 0px; }
-    div[data-testid="stRadio"] label {
-        background-color: #232b36;
-        padding: 5px 15px;
-        border-radius: 5px;
-        border: 1px solid #36404e;
-        margin-right: 5px;
-        cursor: pointer;
-    }
-    div[data-testid="stRadio"] label:hover { border-color: #00d09c; color: #00d09c; }
-
     .perf-container {
         display: grid;
         grid-template-columns: repeat(8, 1fr);
@@ -171,6 +159,15 @@ def get_val(df, keys_list):
             if pd.notna(val): return val
     return 0
 
+def get_debt(df):
+    """Tries to find Total Debt, or sums component debts if Total is missing"""
+    d = get_val(df, ['Total Debt', 'Total Financial Debt'])
+    if d == 0:
+        long_term = get_val(df, ['Long Term Debt', 'Long Term Debt And Capital Lease Obligation'])
+        short_term = get_val(df, ['Current Debt', 'Current Debt And Capital Lease Obligation', 'Commercial Paper'])
+        d = long_term + short_term
+    return d
+
 def fmt_num(num):
     """Formats large numbers for display in checklist"""
     if num is None or num == 0: return "N/A"
@@ -214,7 +211,7 @@ def check(condition, text):
     if condition: return 1, f"✅ {text}"
     else: return 0, f"❌ {text}"
 
-# --- 6-POINT CHECKLIST SCORING ENGINE ---
+# --- 6-POINT CHECKLIST SCORING ENGINE (WITH VALUES) ---
 
 # 1. VALUATION (6 Points)
 v_score = 0
@@ -226,7 +223,7 @@ s, t = check(pe > 0 and pe < 35, f"P/E vs Peers Average ({pe:.1f}x < 35x)"); v_s
 s, t = check(peg > 0 and peg < 1.5, f"PEG Ratio within ideal range ({peg:.2f} < 1.5x)"); v_score+=s; v_details.append(t)
 s, t = check(current_price < analyst_fv, f"Below Analyst Target ({current_price:.2f} < {analyst_fv:.2f})"); v_score+=s; v_details.append(t)
 
-# 2. FUTURE GROWTH (6 Points) - FIXED LOGIC
+# 2. FUTURE GROWTH (6 Points)
 f_score = 0
 f_details = []
 
@@ -262,26 +259,20 @@ try:
             eps_series = hist_fin['Net Income'] / hist_fin['Basic Average Shares']
         else: eps_series = pd.Series([0])
         
-        eps_series = eps_series.dropna() # Remove NaNs to find true oldest
-
+        eps_series = eps_series.dropna()
         if len(eps_series) >= 2:
             curr_eps = eps_series.iloc[-1]
             prev_eps = eps_series.iloc[-2]
             oldest_eps = eps_series.iloc[0]
-            
             eps_growth_1y = (curr_eps - prev_eps) / abs(prev_eps) if prev_eps != 0 else 0
             s, t = check(eps_growth_1y > 0.12, f"EPS Growth ({eps_growth_1y*100:.1f}%) > Industry (12%)"); p_score+=s; p_details.append(t)
             s, t = check(curr_eps > oldest_eps, f"Long Term Growth (EPS: {curr_eps:.2f} > {oldest_eps:.2f})"); p_score+=s; p_details.append(t)
-            
             years = len(eps_series) - 1
             if years > 0 and oldest_eps > 0 and curr_eps > 0:
                 cagr = (curr_eps / oldest_eps) ** (1/years) - 1
                 s, t = check(eps_growth_1y > cagr, f"Accelerating Growth ({eps_growth_1y*100:.1f}% > {cagr*100:.1f}% Avg)"); p_score+=s; p_details.append(t)
-            else:
-                p_details.append("❌ Accelerated Growth (Data requires positive historical earnings)")
-
+            else: p_details.append("❌ Accelerated Growth (Data requires positive historical earnings)")
             s, t = check(roe > 0.20, f"High ROE ({roe*100:.1f}% > 20%)"); p_score+=s; p_details.append(t)
-            
             def get_roce(idx):
                 try:
                     ebit = hist_fin['EBIT'].iloc[idx]
@@ -292,15 +283,11 @@ try:
             curr_roce = get_roce(-1)
             old_roce = get_roce(-3) if len(hist_fin) >= 3 else get_roce(0)
             s, t = check(curr_roce > old_roce, f"ROCE Trend ({curr_roce*100:.1f}% > {old_roce*100:.1f}%)"); p_score+=s; p_details.append(t)
-            
             roa = info.get('returnOnAssets', 0)
             s, t = check(roa > 0.06, f"ROA ({roa*100:.1f}%) > Industry (6%)"); p_score+=s; p_details.append(t)
-        else:
-            p_details.append("❌ Insufficient Historical Data (Need >2 years)")
-    else:
-        p_details.append("❌ Insufficient Historical Data")
-except Exception as e:
-    p_details.append(f"❌ Error in Past Performance: {str(e)}")
+        else: p_details.append("❌ Insufficient Historical Data (Need >2 years)")
+    else: p_details.append("❌ Insufficient Historical Data")
+except Exception as e: p_details.append(f"❌ Error in Past Performance: {str(e)}")
 
 # 4. FINANCIAL HEALTH (6 Points)
 h_score = 0
@@ -309,33 +296,37 @@ try:
     curr_assets = get_val(balance_sheet, ['Current Assets', 'Total Current Assets'])
     curr_liab = get_val(balance_sheet, ['Current Liabilities', 'Total Current Liabilities'])
     total_liab = get_val(balance_sheet, ['Total Liabilities Net Minority Interest', 'Total Liabilities'])
-    total_debt = get_val(balance_sheet, ['Total Debt'])
+    
+    # Improved Debt Fetching (Sum if Total Missing)
+    total_debt = get_debt(balance_sheet)
+
     equity = get_val(balance_sheet, ['Stockholders Equity', 'Total Stockholder Equity', 'Total Equity Gross Minority Interest'])
     cash_bs = get_val(balance_sheet, ['Cash And Cash Equivalents', 'Cash', 'Cash Financial'])
     ebit = get_val(financials, ['EBIT', 'Operating Income', 'Net Income'])
     interest = abs(get_val(financials, ['Interest Expense', 'Interest Expense Non Operating', 'Total Interest Expenses']))
     ocf = get_val(cash_flow, ['Operating Cash Flow', 'Total Cash From Operating Activities', 'Cash Flow From Continuing Operating Activities'])
 
-    if curr_assets > 0 and curr_liab > 0:
-        s, t = check(curr_assets > curr_liab, f"Short Term Assets ({fmt_num(curr_assets)}) > Liab ({fmt_num(curr_liab)})")
-    else:
-        s, t = 0, "❌ Short Term Assets/Liab (Data Unavailable/Bank)"
+    if curr_assets > 0 and curr_liab > 0: s, t = check(curr_assets > curr_liab, f"Short Term Assets ({fmt_num(curr_assets)}) > Liab ({fmt_num(curr_liab)})")
+    else: s, t = 0, "❌ Short Term Assets/Liab (Data Unavailable/Bank)"
     h_score+=s; h_details.append(t)
 
-    if curr_assets > 0:
-        s, t = check(curr_assets > (total_liab - curr_liab), f"Short Term Assets > Long Term Liab ({fmt_num(total_liab - curr_liab)})")
-    else:
-        s, t = 0, "❌ Long Term Coverage (Data Unavailable/Bank)"
+    if curr_assets > 0: s, t = check(curr_assets > (total_liab - curr_liab), f"Short Term Assets > Long Term Liab ({fmt_num(total_liab - curr_liab)})")
+    else: s, t = 0, "❌ Long Term Coverage (Data Unavailable/Bank)"
     h_score+=s; h_details.append(t)
     
     de_ratio = total_debt / equity if equity != 0 else 999
     s, t = check((de_ratio < 0.40) or (cash_bs > total_debt), f"Safe Debt Level (D/E: {de_ratio*100:.0f}% < 40% or Cash > Debt)"); h_score+=s; h_details.append(t)
     
     if len(balance_sheet.columns) > 1:
-        prev_debt = get_val(pd.DataFrame(balance_sheet.iloc[:, 1]), ['Total Debt'])
-        prev_eq = get_val(pd.DataFrame(balance_sheet.iloc[:, 1]), ['Stockholders Equity', 'Total Stockholder Equity'])
-        prev_de = prev_debt / prev_eq if prev_eq != 0 else 999
-        s, t = check(de_ratio < prev_de, f"Reducing Debt ({de_ratio*100:.0f}% < {prev_de*100:.0f}%)"); h_score+=s; h_details.append(t)
+        # Robust Debt Fetching for Previous Year
+        prev_df = pd.DataFrame(balance_sheet.iloc[:, 1])
+        prev_debt = get_debt(prev_df)
+        prev_eq = get_val(prev_df, ['Stockholders Equity', 'Total Stockholder Equity'])
+        
+        if prev_eq != 0:
+            prev_de = prev_debt / prev_eq
+            s, t = check(de_ratio < prev_de, f"Reducing Debt ({de_ratio*100:.0f}% < {prev_de*100:.0f}%)"); h_score+=s; h_details.append(t)
+        else: h_details.append("❌ Reducing Debt (Insufficient Data)")
     else: h_details.append("❌ Reducing Debt (Insufficient Data)")
 
     if total_debt > 0: s, t = check(ocf > (total_debt * 0.2), f"Debt Coverage (OCF {fmt_num(ocf)} > 20% of Debt)")
@@ -362,17 +353,14 @@ try:
         if curr_div >= old_div: is_stable = True
         if curr_div > old_div: is_growing = True
 except: pass
-
 if is_notable:
     s, t = check(is_stable, "Stable Dividend (10 Year History)"); d_score+=s; d_details.append(t)
     s, t = check(is_growing, "Growing Dividend (10 Year History)"); d_score+=s; d_details.append(t)
 else:
     d_details.append("❌ Stable Dividend (Yield too low to qualify)")
     d_details.append("❌ Growing Dividend (Yield too low to qualify)")
-
 payout = info.get('payoutRatio', 0) or 0
 s, t = check(payout < 0.90 and dy > 0, f"Earnings Coverage (Payout: {payout*100:.0f}% < 90%)"); d_score+=s; d_details.append(t)
-
 cf_cover = False
 try:
     div_paid = abs(get_val(cash_flow, ['Cash Dividends Paid', 'Common Stock Dividend Paid']))
@@ -381,15 +369,11 @@ try:
     s, t = check(cf_cover, f"Cash Flow Coverage (Div: {fmt_num(div_paid)} < FCF: {fmt_num(fcf)})"); d_score+=s; d_details.append(t)
 except: d_details.append("❌ Cash Flow Coverage (Data Unavailable)")
 
-# Final Raw Scores (0-6)
 final_scores = [v_score, f_score, p_score, h_score, d_score]
-
-# Color Logic
 total_raw_score = sum(final_scores)
 if total_raw_score < 12: flake_color = "#ff4b4b"
 elif total_raw_score < 20: flake_color = "#ffb300"
 else: flake_color = "#00d09c"
-
 def hex_to_rgba(h, alpha): return tuple(int(h.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)) + (alpha,)
 fill_rgba = f"rgba{hex_to_rgba(flake_color, 0.4)}"
 
@@ -406,25 +390,10 @@ with col1:
     m3.metric("Beta", f"{info.get('beta', 0):.2f}")
     m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
 with col2:
-    # --- SNOWFLAKE CHART ---
     r_vals = final_scores + [final_scores[0]]
     theta_vals = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
-    fig = go.Figure(data=go.Scatterpolar(
-        r=r_vals, theta=theta_vals, fill='toself', line_shape='spline', 
-        line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', 
-        text=[f"{s}/6" for s in r_vals], marker=dict(size=5)
-    ))
-    fig.update_layout(
-        polar=dict(
-            radialaxis=dict(
-                visible=True, range=[0, 6], tickvals=[1, 2, 3, 4, 5, 6], 
-                showticklabels=False, gridcolor='#444', gridwidth=1.5, layer='below traces'
-            ),
-            angularaxis=dict(direction='clockwise', rotation=90, gridcolor='rgba(0,0,0,0)', tickfont=dict(color='white', size=12)),
-            bgcolor='#232b36'
-        ),
-        paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=30, b=30, l=30, r=30), showlegend=False, height=300
-    )
+    fig = go.Figure(data=go.Scatterpolar(r=r_vals, theta=theta_vals, fill='toself', line_shape='spline', line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', text=[f"{s}/6" for s in r_vals], marker=dict(size=5)))
+    fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 6], tickvals=[1, 2, 3, 4, 5, 6], showticklabels=False, gridcolor='#444', gridwidth=1.5, layer='below traces'), angularaxis=dict(direction='clockwise', rotation=90, gridcolor='rgba(0,0,0,0)', tickfont=dict(color='white', size=12)), bgcolor='#232b36'), paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=30, b=30, l=30, r=30), showlegend=False, height=300)
     st.plotly_chart(fig, use_container_width=True)
     with st.expander("📊 See Analysis Breakdown"):
         tab1, tab2, tab3, tab4, tab5 = st.tabs(["Value", "Future", "Past", "Health", "Dividend"])
@@ -446,7 +415,7 @@ with col2:
 
 st.divider()
 
-# --- PRICE HISTORY ---
+# --- PRICE HISTORY & RETURNS ---
 st.header("Price History")
 timeframe = st.radio("Timeframe", ['1D', '5D', '1M', '6M', 'YTD', '1Y', '5Y', 'Max'], horizontal=True, label_visibility="collapsed")
 
@@ -475,34 +444,16 @@ if not chart_data.empty:
     y_max = chart_data['Close'].max()
     y_buffer = (y_max - y_min) * 0.05 if y_max != y_min else y_max * 0.01
     y_range = [y_min - y_buffer, y_max + y_buffer]
-
     fig_price = go.Figure()
-    fig_price.add_trace(go.Scatter(
-        x=chart_data.index, y=chart_data['Close'], mode='lines', name='Close',
-        line=dict(color='#36a2eb' if timeframe in ['1D', '5D'] else '#00d09c', width=2),
-        fill='tozeroy', fillcolor=f"rgba(0, 208, 156, 0.1)" if timeframe not in ['1D', '5D'] else "rgba(54, 162, 235, 0.1)",
-        hovertemplate = '<b>Date:</b> %{x|%b %d, %H:%M}<br><b>Price:</b> %{y:.2f}<extra></extra>'
-    ))
-    
-    xaxis_args = dict(
-        showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='solid', spikecolor="#ffffff", spikethickness=1,
-        gridcolor='#36404e'
-    )
-    if timeframe == '1D' and start_range and end_range:
-        xaxis_args['range'] = [start_range, end_range]
-
+    fig_price.add_trace(go.Scatter(x=chart_data.index, y=chart_data['Close'], mode='lines', name='Close', line=dict(color='#36a2eb' if timeframe in ['1D', '5D'] else '#00d09c', width=2), fill='tozeroy', fillcolor=f"rgba(0, 208, 156, 0.1)" if timeframe not in ['1D', '5D'] else "rgba(54, 162, 235, 0.1)", hovertemplate = '<b>Date:</b> %{x|%b %d, %H:%M}<br><b>Price:</b> %{y:.2f}<extra></extra>'))
+    xaxis_args = dict(showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='solid', spikecolor="#ffffff", spikethickness=1, gridcolor='#36404e')
+    if timeframe == '1D' and start_range and end_range: xaxis_args['range'] = [start_range, end_range]
     fig_price.update_xaxes(**xaxis_args)
-    fig_price.update_yaxes(
-        range=y_range, 
-        showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='dash', spikecolor="#ffffff", spikethickness=1,
-        gridcolor='#36404e'
-    )
+    fig_price.update_yaxes(range=y_range, showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='dash', spikecolor="#ffffff", spikethickness=1, gridcolor='#36404e')
     fig_price.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), height=400, margin=dict(l=0, r=0), hovermode="x unified", hoverlabel=dict(bgcolor="#2c3542", font_size=14, font_family="Segoe UI"))
     st.plotly_chart(fig_price, use_container_width=True)
-else:
-    st.write("Price data unavailable.")
+else: st.write("Price data unavailable for this timeframe.")
 
-# 3. PERCENTAGE RETURNS
 if not perf_data.empty and len(perf_data) > 1:
     curr = perf_data['Close'].iloc[-1]
     if perf_data.index.tz is not None: perf_data.index = perf_data.index.tz_localize(None)
@@ -586,7 +537,6 @@ if not financials.empty:
     op_exp = get_val(financials, ['Operating Expense'])
     net_val = get_val(financials, ['Net Income'])
     other_exp = rev_val - cost_rev - op_exp - net_val
-    
     fig_water = go.Figure(go.Waterfall(orientation = "v", measure = ["relative", "relative", "total", "relative", "relative", "total"], x = ["Revenue", "COGS", "Gross Profit", "Op Expenses", "Other", "Net Income"], textposition = "auto", text = [f"{rev_val/1e9:.1f}B", f"-{cost_rev/1e9:.1f}B", f"{gross_profit/1e9:.1f}B", f"-{op_exp/1e9:.1f}B", f"-{other_exp/1e9:.1f}B", f"{net_val/1e9:.1f}B"], y = [rev_val, -cost_rev, gross_profit, -op_exp, -other_exp, net_val], connector = {"line":{"color":"white"}}, decreasing = {"marker":{"color":"#ff6384"}}, increasing = {"marker":{"color":"#00d09c"}}, totals = {"marker":{"color":"#36a2eb"}}))
     fig_water.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), yaxis=dict(showgrid=True, gridcolor='#36404e'))
     st.plotly_chart(fig_water, use_container_width=True)
@@ -598,9 +548,10 @@ if not balance_sheet.empty and not cash_flow.empty:
     bs_align, cf_align = balance_sheet.loc[common_idx], cash_flow.loc[common_idx]
     d_dates = [d.strftime(date_fmt) for d in common_idx]
     
-    debt = [get_val(pd.DataFrame(bs_align.iloc[[i]]), ['Total Debt']) for i in range(len(bs_align))]
+    # Use helper with list comprehension to fix bank debt/cash issue
+    debt = [get_debt(pd.DataFrame(bs_align.iloc[[i]])) for i in range(len(bs_align))]
     cash = [get_val(pd.DataFrame(bs_align.iloc[[i]]), ['Cash And Cash Equivalents', 'Cash', 'Cash Financial']) for i in range(len(bs_align))]
-    fcf = [get_val(pd.DataFrame(cf_align.iloc[[i]]), ['Free Cash Flow']) for i in range(len(cf_align))]
+    fcf = [get_val(pd.DataFrame(cf_align.iloc[[i]]), ['Free Cash Flow', 'Operating Cash Flow']) for i in range(len(cf_align))]
 
     t_d = [f"{x/1e9:.1f}B" for x in debt]
     t_c = [f"{x/1e9:.1f}B" for x in cash]
@@ -646,7 +597,7 @@ st.header("4. Financial Health")
 h1, h2 = st.columns([2, 1])
 with h1:
     cash = get_val(balance_sheet, ['Cash And Cash Equivalents', 'Cash', 'Cash Financial'])
-    debt_total = get_val(balance_sheet, ['Total Debt'])
+    debt_total = get_debt(balance_sheet) # Use helper
     fig_h = go.Figure()
     fig_h.add_trace(go.Bar(x=['Cash', 'Debt'], y=[cash, debt_total], marker_color=['#00d09c', '#ff6384'], text=[f"${cash/1e9:.1f}B", f"${debt_total/1e9:.1f}B"], textposition='auto'))
     fig_h.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), margin=dict(t=0, b=0, l=0, r=0), height=200)
