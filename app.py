@@ -27,46 +27,27 @@ st.markdown("""
     /* Timeframe Buttons - Centered and Styled */
     div[data-testid="stRadio"] > div { 
         display: flex; 
-        justify-content: center; /* Center the buttons */
-        gap: 10px; 
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 5px; 
         width: 100%;
     }
     div[data-testid="stRadio"] label {
         background-color: #232b36;
-        padding: 5px 20px;
+        padding: 5px 10px;
         border-radius: 5px;
         border: 1px solid #36404e;
         cursor: pointer;
-        flex-grow: 1; /* Make them stretch slightly */
+        flex-grow: 1;
         text-align: center;
+        font-size: 0.9rem;
     }
     div[data-testid="stRadio"] label:hover { border-color: #00d09c; color: #00d09c; }
-
-    .perf-container {
-        display: grid;
-        grid-template-columns: repeat(8, 1fr);
-        gap: 10px;
-        margin-top: 5px;
-        margin-bottom: 20px;
-        background-color: #232b36;
-        padding: 15px;
-        border-radius: 10px;
-        text-align: center;
-    }
-    .perf-item { display: flex; flex-direction: column; }
-    .perf-label { color: #8c97a7; font-size: 0.8rem; margin-bottom: 5px; }
-    .perf-val { font-weight: bold; font-size: 1rem; }
-    .pos { color: #00d09c; }
-    .neg { color: #ff6384; }
     
     /* Checklist Styles */
     .check-item { margin-bottom: 8px; font-size: 0.9rem; }
     .check-pass { color: #00d09c; margin-right: 8px; }
     .check-fail { color: #ff6384; margin-right: 8px; }
-    
-    @media (max-width: 800px) {
-        .perf-container { grid-template-columns: repeat(4, 1fr); gap: 15px; }
-    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -170,7 +151,6 @@ def calc_dcf(stock, info):
 
 # --- HELPER: ROBUST DATA EXTRACTION ---
 def get_val(df, keys_list):
-    """Safely retrieves the first matching key from a DataFrame or returns 0"""
     for k in keys_list:
         if k in df.columns:
             val = df[k].iloc[0]
@@ -178,7 +158,6 @@ def get_val(df, keys_list):
     return 0
 
 def get_debt(df):
-    """Tries to find Total Debt, or sums component debts if Total is missing"""
     d = get_val(df, ['Total Debt', 'Total Financial Debt'])
     if d == 0:
         long_term = get_val(df, ['Long Term Debt', 'Long Term Debt And Capital Lease Obligation'])
@@ -187,7 +166,6 @@ def get_debt(df):
     return d
 
 def fmt_num(num):
-    """Formats large numbers for display in checklist"""
     if num is None or num == 0: return "N/A"
     if abs(num) >= 1e9: return f"${num/1e9:.1f}B"
     if abs(num) >= 1e6: return f"${num/1e6:.1f}M"
@@ -229,7 +207,7 @@ def check(condition, text):
     if condition: return 1, f"✅ {text}"
     else: return 0, f"❌ {text}"
 
-# --- 6-POINT CHECKLIST SCORING ENGINE (WITH VALUES) ---
+# --- 6-POINT CHECKLIST SCORING ENGINE ---
 
 # 1. VALUATION (6 Points)
 v_score = 0
@@ -244,19 +222,12 @@ s, t = check(current_price < analyst_fv, f"Below Analyst Target ({current_price:
 # 2. FUTURE GROWTH (6 Points)
 f_score = 0
 f_details = []
-
 f_eps = info.get('forwardEps', 0) or 0
 t_eps = info.get('trailingEps', 0) or 0
-
-if peg > 0 and pe > 0:
-    g_rate = (pe / peg) / 100
-elif f_eps > 0 and t_eps > 0:
-    g_rate = (f_eps - t_eps) / t_eps
-else:
-    g_rate = info.get('earningsGrowth', 0) or 0
-
+if peg > 0 and pe > 0: g_rate = (pe / peg) / 100
+elif f_eps > 0 and t_eps > 0: g_rate = (f_eps - t_eps) / t_eps
+else: g_rate = info.get('earningsGrowth', 0) or 0
 rev_g = info.get('revenueGrowth', 0) or 0
-
 s, t = check(g_rate > 0.02, f"Earnings Growth ({g_rate*100:.1f}%) > Savings Rate (2%)"); f_score+=s; f_details.append(t)
 s, t = check(g_rate > 0.10, f"Earnings Growth ({g_rate*100:.1f}%) > Market Avg (10%)"); f_score+=s; f_details.append(t)
 s, t = check(g_rate > 0.20, f"High Growth Earnings ({g_rate*100:.1f}%) > 20%"); f_score+=s; f_details.append(t)
@@ -270,13 +241,11 @@ p_details = []
 try:
     hist_fin = financials.sort_index()
     hist_bs = balance_sheet.sort_index()
-    
     if not hist_fin.empty and len(hist_fin) >= 2:
         if 'Basic EPS' in hist_fin.columns: eps_series = hist_fin['Basic EPS']
         elif 'Net Income' in hist_fin.columns and 'Basic Average Shares' in hist_fin.columns:
             eps_series = hist_fin['Net Income'] / hist_fin['Basic Average Shares']
         else: eps_series = pd.Series([0])
-        
         eps_series = eps_series.dropna()
         if len(eps_series) >= 2:
             curr_eps = eps_series.iloc[-1]
@@ -289,7 +258,7 @@ try:
             if years > 0 and oldest_eps > 0 and curr_eps > 0:
                 cagr = (curr_eps / oldest_eps) ** (1/years) - 1
                 s, t = check(eps_growth_1y > cagr, f"Accelerating Growth ({eps_growth_1y*100:.1f}% > {cagr*100:.1f}% Avg)"); p_score+=s; p_details.append(t)
-            else: p_details.append("❌ Accelerated Growth (Data requires positive historical earnings)")
+            else: p_details.append("❌ Accelerated Growth (Insufficient Data)")
             s, t = check(roe > 0.20, f"High ROE ({roe*100:.1f}% > 20%)"); p_score+=s; p_details.append(t)
             def get_roce(idx):
                 try:
@@ -303,7 +272,7 @@ try:
             s, t = check(curr_roce > old_roce, f"ROCE Trend ({curr_roce*100:.1f}% > {old_roce*100:.1f}%)"); p_score+=s; p_details.append(t)
             roa = info.get('returnOnAssets', 0)
             s, t = check(roa > 0.06, f"ROA ({roa*100:.1f}%) > Industry (6%)"); p_score+=s; p_details.append(t)
-        else: p_details.append("❌ Insufficient Historical Data (Need >2 years)")
+        else: p_details.append("❌ Insufficient Historical Data")
     else: p_details.append("❌ Insufficient Historical Data")
 except Exception as e: p_details.append(f"❌ Error in Past Performance: {str(e)}")
 
@@ -314,10 +283,7 @@ try:
     curr_assets = get_val(balance_sheet, ['Current Assets', 'Total Current Assets'])
     curr_liab = get_val(balance_sheet, ['Current Liabilities', 'Total Current Liabilities'])
     total_liab = get_val(balance_sheet, ['Total Liabilities Net Minority Interest', 'Total Liabilities'])
-    
-    # Use robust debt fetch
     total_debt = get_debt(balance_sheet)
-
     equity = get_val(balance_sheet, ['Stockholders Equity', 'Total Stockholder Equity', 'Total Equity Gross Minority Interest'])
     cash_bs = get_val(balance_sheet, ['Cash And Cash Equivalents', 'Cash', 'Cash Financial'])
     ebit = get_val(financials, ['EBIT', 'Operating Income', 'Net Income'])
@@ -350,7 +316,6 @@ try:
     if interest > 0: s, t = check(ebit > (interest * 5), f"Interest Coverage (EBIT/Int: {(ebit/interest):.1f}x > 5x)")
     else: s, t = 1, "✅ Interest Coverage (No Interest)"
     h_score+=s; h_details.append(t)
-
 except Exception as e: h_score = 3; h_details.append(f"❌ Balance Sheet Data Unavailable: {str(e)}")
 
 # 5. DIVIDEND (6 Points)
@@ -432,12 +397,64 @@ st.divider()
 # --- PRICE HISTORY & RETURNS ---
 st.header("Price History")
 
-# 1. Placeholder for the Graph
+# Placeholder for Graph
 chart_placeholder = st.empty()
 
-# 2. Selectors below graph
-timeframe = st.radio("Timeframe", ['1D', '5D', '1M', '6M', 'YTD', '1Y', '5Y', 'Max'], horizontal=True, label_visibility="collapsed")
+# 1. PRE-FETCH MAX HISTORY FOR LABELS
+perf_data = stock.history(period="max", interval="1d")
+if not perf_data.empty:
+    # Fix timezone
+    if perf_data.index.tz is not None:
+        perf_data.index = perf_data.index.tz_localize(None)
+    curr = perf_data['Close'].iloc[-1]
+else:
+    curr = 0
 
+def get_ret_val(df, days_back=None, fixed_date=None):
+    try:
+        if fixed_date:
+            idx = df.index.get_indexer([pd.to_datetime(fixed_date)], method='nearest')[0]
+            past_price = df['Close'].iloc[idx]
+        else:
+            if len(df) < days_back: return None
+            past_price = df['Close'].iloc[-days_back]
+        return ((curr - past_price) / past_price) * 100
+    except: return None
+
+def format_label(label, val):
+    if val is None: return label
+    sign = "+" if val >= 0 else ""
+    return f"{label} ({sign}{val:.2f}%)"
+
+ytd_date = datetime(datetime.now().year, 1, 1)
+
+# Calculate Returns for Labels
+r_1d = get_ret_val(perf_data, 2)
+r_5d = get_ret_val(perf_data, 6)
+r_1m = get_ret_val(perf_data, 22)
+r_6m = get_ret_val(perf_data, 126)
+r_ytd = get_ret_val(perf_data, fixed_date=ytd_date)
+r_1y = get_ret_val(perf_data, 252)
+r_5y = get_ret_val(perf_data, 1260)
+r_max = get_ret_val(perf_data, days_back=len(perf_data)-1) if not perf_data.empty else None
+
+# Create Label Dictionary to Map back to Keys
+timeframe_map = {
+    format_label("1D", r_1d): "1D",
+    format_label("5D", r_5d): "5D",
+    format_label("1M", r_1m): "1M",
+    format_label("6M", r_6m): "6M",
+    format_label("YTD", r_ytd): "YTD",
+    format_label("1Y", r_1y): "1Y",
+    format_label("5Y", r_5y): "5Y",
+    format_label("Max", r_max): "Max"
+}
+
+# 2. RENDER BUTTONS BELOW GRAPH
+selected_label = st.radio("Timeframe", list(timeframe_map.keys()), horizontal=True, label_visibility="collapsed")
+timeframe = timeframe_map[selected_label]
+
+# 3. FETCH CHART DATA BASED ON SELECTION
 start_range = None
 end_range = None
 chart_data = pd.DataFrame()
@@ -456,9 +473,7 @@ elif timeframe == '1Y': chart_data = stock.history(period='1y', interval='1d')
 elif timeframe == '5Y': chart_data = stock.history(period='5y', interval='1d')
 elif timeframe == 'Max': chart_data = stock.history(period='max', interval='1d')
 
-perf_data = stock.history(period="max", interval="1d")
-
-# 3. GRAPH RENDER (Push to placeholder)
+# 4. PUSH GRAPH TO PLACEHOLDER
 if not chart_data.empty:
     y_min = chart_data['Close'].min()
     y_max = chart_data['Close'].max()
@@ -478,25 +493,6 @@ if not chart_data.empty:
     chart_placeholder.plotly_chart(fig_price, use_container_width=True)
 else:
     chart_placeholder.write("Price data unavailable for this timeframe.")
-
-# 4. PERFORMANCE STRIP (Bottom)
-if not perf_data.empty and len(perf_data) > 1:
-    curr = perf_data['Close'].iloc[-1]
-    if perf_data.index.tz is not None: perf_data.index = perf_data.index.tz_localize(None)
-    def get_ret(df, days_back=None, fixed_date=None):
-        try:
-            if fixed_date:
-                idx = df.index.get_indexer([pd.to_datetime(fixed_date)], method='nearest')[0]
-                past_price = df['Close'].iloc[idx]
-            else:
-                if len(df) < days_back: return "N/A"
-                past_price = df['Close'].iloc[-days_back]
-            val = ((curr - past_price) / past_price) * 100
-            color = "pos" if val >= 0 else "neg"
-            return f'<span class="{color}">{val:+.2f}%</span>'
-        except: return "N/A"
-    ytd_date = datetime(datetime.now().year, 1, 1)
-    st.markdown(f"""<div class="perf-container"><div class="perf-item"><span class="perf-label">1 Day</span><span class="perf-val">{get_ret(perf_data, 2)}</span></div><div class="perf-item"><span class="perf-label">5 Days</span><span class="perf-val">{get_ret(perf_data, 6)}</span></div><div class="perf-item"><span class="perf-label">1 Month</span><span class="perf-val">{get_ret(perf_data, 22)}</span></div><div class="perf-item"><span class="perf-label">6 Months</span><span class="perf-val">{get_ret(perf_data, 126)}</span></div><div class="perf-item"><span class="perf-label">YTD</span><span class="perf-val">{get_ret(perf_data, fixed_date=ytd_date)}</span></div><div class="perf-item"><span class="perf-label">1 Year</span><span class="perf-val">{get_ret(perf_data, 252)}</span></div><div class="perf-item"><span class="perf-label">5 Years</span><span class="perf-val">{get_ret(perf_data, 1260)}</span></div><div class="perf-item"><span class="perf-label">All Time</span><span class="perf-val">{get_ret(perf_data, days_back=len(perf_data)-1)}</span></div></div>""", unsafe_allow_html=True)
 
 st.divider()
 
@@ -573,16 +569,12 @@ if not balance_sheet.empty and not cash_flow.empty:
     common_idx = balance_sheet.index.intersection(cash_flow.index)
     bs_align, cf_align = balance_sheet.loc[common_idx], cash_flow.loc[common_idx]
     d_dates = [d.strftime(date_fmt) for d in common_idx]
-    
-    # Use helper with list comprehension to fix bank debt/cash issue
     debt = [get_debt(pd.DataFrame(bs_align.iloc[[i]])) for i in range(len(bs_align))]
     cash = [get_val(pd.DataFrame(bs_align.iloc[[i]]), ['Cash And Cash Equivalents', 'Cash', 'Cash Financial']) for i in range(len(bs_align))]
     fcf = [get_val(pd.DataFrame(cf_align.iloc[[i]]), ['Free Cash Flow', 'Operating Cash Flow']) for i in range(len(cf_align))]
-
     t_d = [f"{x/1e9:.1f}B" for x in debt]
     t_c = [f"{x/1e9:.1f}B" for x in cash]
     t_f = [f"{x/1e9:.1f}B" for x in fcf]
-    
     fig_debt = go.Figure()
     fig_debt.add_trace(go.Bar(x=d_dates, y=debt, name='Total Debt', marker_color='#ff6384', text=t_d, textposition='auto'))
     fig_debt.add_trace(go.Bar(x=d_dates, y=fcf, name='Free Cash Flow', marker_color='#00d09c', text=t_f, textposition='auto'))
