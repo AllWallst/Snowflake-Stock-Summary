@@ -151,6 +151,7 @@ def calc_dcf(stock, info):
 
 # --- HELPER: ROBUST DATA EXTRACTION ---
 def get_val(df, keys_list):
+    """Safely retrieves the first matching key from a DataFrame or returns 0"""
     for k in keys_list:
         if k in df.columns:
             val = df[k].iloc[0]
@@ -158,6 +159,7 @@ def get_val(df, keys_list):
     return 0
 
 def get_debt(df):
+    """Tries to find Total Debt, or sums component debts if Total is missing"""
     d = get_val(df, ['Total Debt', 'Total Financial Debt'])
     if d == 0:
         long_term = get_val(df, ['Long Term Debt', 'Long Term Debt And Capital Lease Obligation'])
@@ -166,6 +168,7 @@ def get_debt(df):
     return d
 
 def fmt_num(num):
+    """Formats large numbers for display in checklist"""
     if num is None or num == 0: return "N/A"
     if abs(num) >= 1e9: return f"${num/1e9:.1f}B"
     if abs(num) >= 1e6: return f"${num/1e6:.1f}M"
@@ -207,7 +210,7 @@ def check(condition, text):
     if condition: return 1, f"✅ {text}"
     else: return 0, f"❌ {text}"
 
-# --- 6-POINT CHECKLIST SCORING ENGINE ---
+# --- 6-POINT CHECKLIST SCORING ENGINE (WITH VALUES) ---
 
 # 1. VALUATION (6 Points)
 v_score = 0
@@ -224,10 +227,12 @@ f_score = 0
 f_details = []
 f_eps = info.get('forwardEps', 0) or 0
 t_eps = info.get('trailingEps', 0) or 0
+
 if peg > 0 and pe > 0: g_rate = (pe / peg) / 100
 elif f_eps > 0 and t_eps > 0: g_rate = (f_eps - t_eps) / t_eps
 else: g_rate = info.get('earningsGrowth', 0) or 0
 rev_g = info.get('revenueGrowth', 0) or 0
+
 s, t = check(g_rate > 0.02, f"Earnings Growth ({g_rate*100:.1f}%) > Savings Rate (2%)"); f_score+=s; f_details.append(t)
 s, t = check(g_rate > 0.10, f"Earnings Growth ({g_rate*100:.1f}%) > Market Avg (10%)"); f_score+=s; f_details.append(t)
 s, t = check(g_rate > 0.20, f"High Growth Earnings ({g_rate*100:.1f}%) > 20%"); f_score+=s; f_details.append(t)
@@ -258,7 +263,7 @@ try:
             if years > 0 and oldest_eps > 0 and curr_eps > 0:
                 cagr = (curr_eps / oldest_eps) ** (1/years) - 1
                 s, t = check(eps_growth_1y > cagr, f"Accelerating Growth ({eps_growth_1y*100:.1f}% > {cagr*100:.1f}% Avg)"); p_score+=s; p_details.append(t)
-            else: p_details.append("❌ Accelerated Growth (Insufficient Data)")
+            else: p_details.append("❌ Accelerated Growth (Data requires positive historical earnings)")
             s, t = check(roe > 0.20, f"High ROE ({roe*100:.1f}% > 20%)"); p_score+=s; p_details.append(t)
             def get_roce(idx):
                 try:
@@ -272,7 +277,7 @@ try:
             s, t = check(curr_roce > old_roce, f"ROCE Trend ({curr_roce*100:.1f}% > {old_roce*100:.1f}%)"); p_score+=s; p_details.append(t)
             roa = info.get('returnOnAssets', 0)
             s, t = check(roa > 0.06, f"ROA ({roa*100:.1f}%) > Industry (6%)"); p_score+=s; p_details.append(t)
-        else: p_details.append("❌ Insufficient Historical Data")
+        else: p_details.append("❌ Insufficient Historical Data (Need >2 years)")
     else: p_details.append("❌ Insufficient Historical Data")
 except Exception as e: p_details.append(f"❌ Error in Past Performance: {str(e)}")
 
@@ -302,9 +307,8 @@ try:
     s, t = check((de_ratio < 0.40) or (cash_bs > total_debt), f"Safe Debt Level (D/E: {de_ratio*100:.0f}% < 40% or Cash > Debt)"); h_score+=s; h_details.append(t)
     
     if len(balance_sheet.columns) > 1:
-        prev_df = pd.DataFrame(balance_sheet.iloc[:, 1])
-        prev_debt = get_debt(prev_df)
-        prev_eq = get_val(prev_df, ['Stockholders Equity', 'Total Stockholder Equity'])
+        prev_debt = get_debt(pd.DataFrame(balance_sheet.iloc[:, 1]))
+        prev_eq = get_val(pd.DataFrame(balance_sheet.iloc[:, 1]), ['Stockholders Equity', 'Total Stockholder Equity'])
         prev_de = prev_debt / prev_eq if prev_eq != 0 else 999
         s, t = check(de_ratio < prev_de, f"Reducing Debt ({de_ratio*100:.0f}% < {prev_de*100:.0f}%)"); h_score+=s; h_details.append(t)
     else: h_details.append("❌ Reducing Debt (Insufficient Data)")
@@ -369,6 +373,7 @@ with col1:
     m3.metric("Beta", f"{info.get('beta', 0):.2f}")
     m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
 with col2:
+    # SNOWFLAKE
     r_vals = final_scores + [final_scores[0]]
     theta_vals = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
     fig = go.Figure(data=go.Scatterpolar(r=r_vals, theta=theta_vals, fill='toself', line_shape='spline', line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', text=[f"{s}/6" for s in r_vals], marker=dict(size=5)))
@@ -403,7 +408,6 @@ chart_placeholder = st.empty()
 # 1. PRE-FETCH MAX HISTORY FOR LABELS
 perf_data = stock.history(period="max", interval="1d")
 if not perf_data.empty:
-    # Fix timezone
     if perf_data.index.tz is not None:
         perf_data.index = perf_data.index.tz_localize(None)
     curr = perf_data['Close'].iloc[-1]
@@ -438,7 +442,8 @@ r_1y = get_ret_val(perf_data, 252)
 r_5y = get_ret_val(perf_data, 1260)
 r_max = get_ret_val(perf_data, days_back=len(perf_data)-1) if not perf_data.empty else None
 
-# Create Label Dictionary to Map back to Keys
+# Create Label Map (Displayed Label -> Internal Key)
+# This map uses the static keys as values to maintain state
 timeframe_map = {
     format_label("1D", r_1d): "1D",
     format_label("5D", r_5d): "5D",
@@ -450,9 +455,19 @@ timeframe_map = {
     format_label("Max", r_max): "Max"
 }
 
-# 2. RENDER BUTTONS BELOW GRAPH
-selected_label = st.radio("Timeframe", list(timeframe_map.keys()), horizontal=True, label_visibility="collapsed")
-timeframe = timeframe_map[selected_label]
+# 2. RENDER BUTTONS (Using format_func to show percentages but keep static keys)
+# We pass the list of static keys ["1D", "5D"...] to the radio button.
+# format_func then looks up the dynamic label in a reverse map.
+
+static_keys = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "Max"]
+# Build reverse lookup for format_func
+key_to_label = {v: k for k, v in timeframe_map.items()}
+
+def format_func(option):
+    return key_to_label.get(option, option)
+
+# The selection variable will hold the STATIC key (e.g. "1D")
+timeframe = st.radio("Timeframe", static_keys, format_func=format_func, horizontal=True, label_visibility="collapsed")
 
 # 3. FETCH CHART DATA BASED ON SELECTION
 start_range = None
