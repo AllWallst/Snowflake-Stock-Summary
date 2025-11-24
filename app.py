@@ -41,6 +41,11 @@ st.markdown("""
     .pos { color: #00d09c; }
     .neg { color: #ff6384; }
     
+    /* Checklist Styles */
+    .check-item { margin-bottom: 8px; font-size: 0.9rem; }
+    .check-pass { color: #00d09c; margin-right: 8px; }
+    .check-fail { color: #ff6384; margin-right: 8px; }
+    
     @media (max-width: 800px) {
         .perf-container { grid-template-columns: repeat(4, 1fr); gap: 15px; }
     }
@@ -150,12 +155,15 @@ def get_val(df, keys_list):
     """Safely retrieves the first matching key from a DataFrame or returns 0"""
     for k in keys_list:
         if k in df.columns:
-            return df[k].iloc[0]
+            val = df[k].iloc[0]
+            # Check for NaN (Not a Number) which yfinance sometimes returns
+            if pd.notna(val):
+                return val
     return 0
 
 def fmt_num(num):
     """Formats large numbers for display in checklist"""
-    if num is None: return "N/A"
+    if num is None or num == 0: return "N/A"
     if abs(num) >= 1e9: return f"${num/1e9:.1f}B"
     if abs(num) >= 1e6: return f"${num/1e6:.1f}M"
     return f"${num:.2f}"
@@ -212,6 +220,7 @@ s, t = check(current_price < analyst_fv, f"Below Analyst Target ({current_price:
 f_score = 0
 f_details = []
 
+# Calculate Smart Growth Rate (Forecast vs Trailing)
 f_eps = info.get('forwardEps', 0) or 0
 t_eps = info.get('trailingEps', 0) or 0
 
@@ -248,6 +257,7 @@ try:
         prev_eps = eps_series.iloc[-2]
         eps_growth_1y = (curr_eps - prev_eps) / abs(prev_eps) if prev_eps != 0 else 0
         
+        # Checks with values
         s, t = check(eps_growth_1y > 0.12, f"EPS Growth ({eps_growth_1y*100:.1f}%) > Industry (12%)"); p_score+=s; p_details.append(t)
         s, t = check(curr_eps > eps_series.iloc[0], f"Long Term Growth (EPS: {curr_eps:.2f} > {eps_series.iloc[0]:.2f})"); p_score+=s; p_details.append(t)
         
@@ -282,40 +292,61 @@ except Exception as e:
 h_score = 0
 h_details = []
 try:
-    curr_assets = get_val(balance_sheet, ['Current Assets'])
-    curr_liab = get_val(balance_sheet, ['Current Liabilities'])
+    # Robust Data Extraction
+    curr_assets = get_val(balance_sheet, ['Current Assets', 'Total Current Assets'])
+    curr_liab = get_val(balance_sheet, ['Current Liabilities', 'Total Current Liabilities'])
+    
     total_liab = get_val(balance_sheet, ['Total Liabilities Net Minority Interest', 'Total Liabilities'])
     total_debt = get_val(balance_sheet, ['Total Debt'])
-    equity = get_val(balance_sheet, ['Stockholders Equity', 'Total Stockholder Equity'])
-    cash_bs = get_val(balance_sheet, ['Cash And Cash Equivalents', 'Cash'])
-    ebit = get_val(financials, ['EBIT', 'Net Income'])
-    interest = abs(get_val(financials, ['Interest Expense']))
-    ocf = get_val(cash_flow, ['Total Cash From Operating Activities'])
+    equity = get_val(balance_sheet, ['Stockholders Equity', 'Total Stockholder Equity', 'Total Equity Gross Minority Interest'])
+    cash_bs = get_val(balance_sheet, ['Cash And Cash Equivalents', 'Cash', 'Cash Financial'])
+    
+    # Expanded Search for EBIT and Interest
+    ebit = get_val(financials, ['EBIT', 'Operating Income', 'Net Income'])
+    interest = abs(get_val(financials, ['Interest Expense', 'Interest Expense Non Operating', 'Total Interest Expenses']))
+    
+    # Expanded Search for OCF
+    ocf = get_val(cash_flow, ['Operating Cash Flow', 'Total Cash From Operating Activities', 'Cash Flow From Continuing Operating Activities'])
 
+    # 1. Short Term (Zero Check for Banks)
     if curr_assets > 0 and curr_liab > 0:
         s, t = check(curr_assets > curr_liab, f"Short Term Assets ({fmt_num(curr_assets)}) > Liab ({fmt_num(curr_liab)})")
     else:
         s, t = 0, "❌ Short Term Assets/Liab (Data Unavailable/Bank)"
     h_score+=s; h_details.append(t)
 
+    # 2. Long Term
     if curr_assets > 0:
         s, t = check(curr_assets > (total_liab - curr_liab), f"Short Term Assets > Long Term Liab ({fmt_num(total_liab - curr_liab)})")
     else:
         s, t = 0, "❌ Long Term Coverage (Data Unavailable/Bank)"
     h_score+=s; h_details.append(t)
     
+    # 3. Debt Level
     de_ratio = total_debt / equity if equity != 0 else 999
     s, t = check((de_ratio < 0.40) or (cash_bs > total_debt), f"Safe Debt Level (D/E: {de_ratio*100:.0f}% < 40% or Cash > Debt)"); h_score+=s; h_details.append(t)
     
+    # 4. Reducing Debt
     if len(balance_sheet.columns) > 1:
         prev_debt = get_val(pd.DataFrame(balance_sheet.iloc[:, 1]), ['Total Debt'])
-        prev_eq = get_val(pd.DataFrame(balance_sheet.iloc[:, 1]), ['Stockholders Equity'])
+        prev_eq = get_val(pd.DataFrame(balance_sheet.iloc[:, 1]), ['Stockholders Equity', 'Total Stockholder Equity'])
         prev_de = prev_debt / prev_eq if prev_eq != 0 else 999
         s, t = check(de_ratio < prev_de, f"Reducing Debt ({de_ratio*100:.0f}% < {prev_de*100:.0f}%)"); h_score+=s; h_details.append(t)
     else: h_details.append("❌ Reducing Debt (Insufficient Data)")
 
-    s, t = check(ocf > (total_debt * 0.2), f"Debt Coverage (OCF {fmt_num(ocf)} > 20% of Debt)"); h_score+=s; h_details.append(t)
-    s, t = check(interest == 0 or (ebit > (interest * 5)), f"Interest Coverage (EBIT/Int: {(ebit/interest):.1f}x > 5x)" if interest > 0 else "✅ Interest Coverage (No Interest)"); h_score+=s; h_details.append(t)
+    # 5. Debt Coverage
+    if total_debt > 0:
+        s, t = check(ocf > (total_debt * 0.2), f"Debt Coverage (OCF {fmt_num(ocf)} > 20% of Debt)")
+    else:
+        s, t = 1, "✅ Debt Coverage (No Debt)"
+    h_score+=s; h_details.append(t)
+
+    # 6. Interest Coverage
+    if interest > 0:
+        s, t = check(ebit > (interest * 5), f"Interest Coverage (EBIT/Int: {(ebit/interest):.1f}x > 5x)")
+    else:
+        s, t = 1, "✅ Interest Coverage (No Interest)"
+    h_score+=s; h_details.append(t)
 
 except Exception as e:
     h_score = 3
@@ -358,11 +389,11 @@ try:
 except: 
     d_details.append("❌ Cash Flow Coverage (Data Unavailable)")
 
-# FIX: Do NOT normalize to 5. Use the 0-6 scale directly.
-final_scores = [v_score, f_score, p_score, h_score, d_score]
+# Normalize to 5 for Chart
+final_scores = [(s/6)*5 for s in [v_score, f_score, p_score, h_score, d_score]]
 
 # Color Logic
-total_raw_score = sum(final_scores)
+total_raw_score = sum([v_score, f_score, p_score, h_score, d_score])
 if total_raw_score < 12: flake_color = "#ff4b4b"
 elif total_raw_score < 20: flake_color = "#ffb300"
 else: flake_color = "#00d09c"
@@ -399,7 +430,7 @@ with col2:
         line_color=flake_color,
         fillcolor=fill_rgba,
         hoverinfo='text',
-        text=[f"{s}/6" for s in [v_score, f_score, p_score, h_score, d_score, v_score]], 
+        text=[f"{s:.1f}/6" for s in [v_score, f_score, p_score, h_score, d_score, v_score]], 
         marker=dict(size=5)
     ))
     
@@ -408,8 +439,6 @@ with col2:
             radialaxis=dict(
                 visible=True,
                 range=[0, 6], # Updated Range
-                tickmode='array',
-                tickvals=[1, 2, 3, 4, 5, 6], # Force integer grid lines
                 showticklabels=False,
                 gridcolor='#444', 
                 gridwidth=1.5,
