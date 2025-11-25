@@ -579,18 +579,18 @@ st.header("2. Future Growth")
 f1, f2 = st.columns(2)
 with f1:
     fig_f = go.Figure(data=[
-        go.Bar(name='Company', x=['Growth'], y=[g_rate*100], marker_color='#36a2eb', text=[f"{g_rate*100:.1f}%"]),
-        go.Bar(name='Market', x=['Growth'], y=[0.10*100], marker_color='#ff6384', text=["10.0%"]),
-        go.Bar(name='Savings', x=['Growth'], y=[0.02*100], marker_color='#ffce56', text=["2.0%"])
+        go.Bar(name='Company', x=['Growth'], y=[g_rate*100], marker_color='#36a2eb', text=[f"{g_rate*100:.1f}%"], textposition='auto'),
+        go.Bar(name='Market', x=['Growth'], y=[10.0], marker_color='#ff6384', text=["10.0%"], textposition='auto'),
+        go.Bar(name='Savings', x=['Growth'], y=[2.0], marker_color='#ffce56', text=["2.0%"], textposition='auto')
     ])
     fig_f.update_layout(barmode='group', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), title="Annual Forecast", height=300)
     st.plotly_chart(fig_f, use_container_width=True)
 with f2:
     fig_roe = go.Figure(go.Indicator(
-        mode = "number+gauge", value = roe*100, title = {'text': "Future ROE Est."},
-        gauge = {'shape': "bullet", 'axis': {'range': [0, 100]}, 'threshold': {'line': {'color': "white", 'width': 2}, 'thickness': 0.75, 'value': 20}}
+        mode = "number+gauge", value = roe*100, title = {'text': "Future ROE Est."}, number={'suffix': "%"},
+        gauge = {'shape': "bullet", 'axis': {'range': [0, max(100, roe*100)]}, 'bar': {'color': "#00d09c"}, 'threshold': {'line': {'color': "white", 'width': 2}, 'thickness': 0.75, 'value': 20}}
     ))
-    fig_roe.update_layout(paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), height=250)
+    fig_roe.update_layout(paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), height=250, margin=dict(l=20, r=20, t=40, b=20))
     st.plotly_chart(fig_roe, use_container_width=True)
 
 st.divider()
@@ -642,7 +642,22 @@ with d2:
     payout = info.get('payoutRatio', 0) or 0
     if payout > 0:
         fig_pay = go.Figure(data=[go.Pie(labels=['Payout', 'Retained'], values=[payout, 1-payout], hole=.7, marker=dict(colors=['#36a2eb', '#232b36']), textinfo='none', hoverinfo='label+percent')])
-        fig_pay.update_layout(showlegend=False, height=170, margin=dict(t=50, b=10, l=20, r=20), paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), title={'text': "Payout Ratio", 'x': 0.5, 'y': 0.85, 'xanchor': 'center', 'font': {'size': 14, 'color': '#8c97a7'}}, annotations=[dict(text=f"<span style='font-size:20px; font-weight:bold'>{payout*100:.0f}%</span>", x=0.5, y=0.5, showarrow=False)])
+        fig_pay.update_layout(
+            showlegend=False, 
+            height=300, 
+            margin=dict(t=50, b=20, l=20, r=20), # Increased top margin for title
+            paper_bgcolor='rgba(0,0,0,0)', 
+            font=dict(color='white'),
+            title={
+                'text': "Payout Ratio",
+                'y': 0.95,
+                'x': 0.5,
+                'xanchor': 'center',
+                'yanchor': 'top',
+                'font': {'size': 14, 'color': '#8c97a7'}
+            },
+            annotations=[dict(text=f"{payout*100:.0f}%", x=0.5, y=0.5, font_size=24, showarrow=False)]
+        )
         st.plotly_chart(fig_pay, use_container_width=True)
     else: st.write("No Dividend Payout")
 
