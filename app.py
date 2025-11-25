@@ -640,8 +640,8 @@ with d1:
 with d2:
     payout = info.get('payoutRatio', 0) or 0
     if payout > 0:
-        fig_pay = go.Figure(data=[go.Pie(labels=['Payout', 'Retained'], values=[payout, 1-payout], hole=.7, marker=dict(colors=['#36a2eb', '#232b36']))])
-        fig_pay.update_layout(showlegend=False, height=300, margin=dict(t=20, b=20, l=20, r=20), paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), annotations=[dict(text=f"{payout*100:.0f}%", x=0.5, y=0.5, font_size=24, showarrow=False)])
+        fig_pay = go.Figure(data=[go.Pie(labels=['Payout', 'Retained'], values=[payout, 1-payout], hole=.7, marker=dict(colors=['#36a2eb', '#232b36']), textinfo='none', hoverinfo='label+percent')])
+        fig_pay.update_layout(showlegend=False, height=300, margin=dict(t=20, b=20, l=20, r=20), paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), annotations=[dict(text=f"<span style='font-size:12px; color:#8c97a7'>Payout Ratio</span><br><span style='font-size:28px; font-weight:bold'>{payout*100:.0f}%</span>", x=0.5, y=0.5, showarrow=False)])
         st.plotly_chart(fig_pay, use_container_width=True)
     else: st.write("No Dividend Payout")
 
