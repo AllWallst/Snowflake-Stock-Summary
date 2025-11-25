@@ -10,13 +10,6 @@ from urllib.parse import urlparse
 # --- PAGE CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="MarketRadar", page_icon="📡")
 
-# --- SESSION STATE INITIALIZATION (Must be at top) ---
-if 'val_method' not in st.session_state:
-    st.session_state.val_method = "Discounted Cash Flow (DCF)"
-
-if 'tf_sel' not in st.session_state:
-    st.session_state.tf_sel = '1D'
-
 # --- CUSTOM CSS ---
 st.markdown("""
     <style>
@@ -31,52 +24,31 @@ st.markdown("""
     .news-meta { color: #8c97a7; font-size: 0.85em; }
     div[data-baseweb="select"] > div { background-color: #2c3542; color: white; border-color: #444; }
     
-    /* Timeframe Buttons - Centered and Styled */
-    div[data-testid="stRadio"] > div { 
-        display: flex; 
-        justify-content: center;
-        flex-wrap: wrap;
-        gap: 5px; 
-        width: 100%;
-    }
+    /* Timeframe Buttons */
+    div[data-testid="stRadio"] > div { display: flex; justify-content: center; gap: 5px; width: 100%; flex-wrap: wrap; }
     div[data-testid="stRadio"] label {
-        background-color: #232b36;
-        padding: 5px 10px;
-        border-radius: 5px;
-        border: 1px solid #36404e;
-        cursor: pointer;
-        flex-grow: 1;
-        text-align: center;
-        font-size: 0.9rem;
+        background-color: #232b36; padding: 5px 10px; border-radius: 5px; border: 1px solid #36404e;
+        cursor: pointer; flex-grow: 1; text-align: center; font-size: 0.9rem;
     }
     div[data-testid="stRadio"] label:hover { border-color: #00d09c; color: #00d09c; }
     
-    /* Performance Grid Styles */
     .perf-container {
-        display: grid;
-        grid-template-columns: repeat(8, 1fr);
-        gap: 5px;
-        margin-top: 15px;
-        margin-bottom: 20px;
-        padding: 10px;
-        border-radius: 10px;
-        text-align: center;
-        background-color: #181e26;
-        border: 1px solid #36404e;
+        display: grid; grid-template-columns: repeat(8, 1fr); gap: 10px;
+        margin-top: 10px; margin-bottom: 20px; background-color: #232b36;
+        padding: 15px; border-radius: 10px; text-align: center;
     }
     .perf-item { display: flex; flex-direction: column; }
-    .perf-label { color: #8c97a7; font-size: 0.75rem; margin-bottom: 2px; }
-    .perf-val { font-weight: bold; font-size: 0.95rem; }
+    .perf-label { color: #8c97a7; font-size: 0.8rem; margin-bottom: 5px; }
+    .perf-val { font-weight: bold; font-size: 1rem; }
     .pos { color: #00d09c; }
     .neg { color: #ff6384; }
     
-    /* Checklist Styles */
     .check-item { margin-bottom: 8px; font-size: 0.9rem; }
     .check-pass { color: #00d09c; margin-right: 8px; }
     .check-fail { color: #ff6384; margin-right: 8px; }
     
     @media (max-width: 800px) {
-        .perf-container { grid-template-columns: repeat(4, 1fr); gap: 10px; }
+        .perf-container { grid-template-columns: repeat(4, 1fr); gap: 15px; }
     }
     </style>
 """, unsafe_allow_html=True)
@@ -126,9 +98,10 @@ if search_query:
 # --- URL & STATE MANAGEMENT ---
 if "ticker" not in st.query_params:
     st.query_params["ticker"] = "AAPL"
+ticker = st.query_params["ticker"]
 
-current_ticker = st.query_params["ticker"]
-ticker = current_ticker # Ensure variable is set
+if 'val_method' not in st.session_state:
+    st.session_state.val_method = "Discounted Cash Flow (DCF)"
 
 # --- FETCH DATA ---
 news_list = [] 
@@ -420,56 +393,43 @@ fill_rgba = f"rgba{hex_to_rgba(flake_color, 0.4)}"
 st.markdown(f"### {info.get('shortName', ticker)} ({ticker})")
 st.write(info.get('longBusinessSummary', '')[:350] + "...")
 
-col1, col2 = st.columns([2, 1])
+# --- METRICS ROW (GAUGES + NUMBERS) ---
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Price", f"${current_price:.2f}")
+m2.metric("Market Cap", f"${(info.get('marketCap',0)/1e9):.1f}B")
+m3.metric("Beta", f"{info.get('beta', 0):.2f}")
+m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
 
-with col1:
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Price", f"${current_price:.2f}")
-    m2.metric("Market Cap", f"${(info.get('marketCap',0)/1e9):.1f}B")
-    m3.metric("Beta", f"{info.get('beta', 0):.2f}")
-    m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
+g1, g2, g3 = st.columns(3)
+g1.plotly_chart(create_gauge(beta, 0, 3, "Beta", suffix="x"), use_container_width=True)
+g2.plotly_chart(create_gauge(info.get('marketCap',0)/1e9, 0, 3000, "Market Cap ($B)", color="#36a2eb"), use_container_width=True)
+g3.plotly_chart(create_gauge(current_price, 0, current_price*1.5, "Price ($)"), use_container_width=True)
 
-    g1, g2, g3 = st.columns(3)
-    g1.plotly_chart(create_gauge(beta, 0, 3, "Beta", suffix="x"), use_container_width=True)
-    g2.plotly_chart(create_gauge(info.get('marketCap',0)/1e9, 0, 3000, "Market Cap ($B)", color="#36a2eb"), use_container_width=True)
-    g3.plotly_chart(create_gauge(current_price, 0, current_price*1.5, "Price ($)"), use_container_width=True)
+st.divider()
 
-with col2:
-    # --- SNOWFLAKE ---
+# --- SNOWFLAKE & ANALYSIS BREAKDOWN ---
+st.header("Fundamental Analysis")
+
+# Centered Snowflake with Columns
+c_left, c_center, c_right = st.columns([1, 2, 1])
+
+with c_center:
     r_vals = final_scores + [final_scores[0]]
     theta_vals = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
-    fig = go.Figure(data=go.Scatterpolar(
-        r=r_vals, theta=theta_vals, fill='toself', line_shape='spline', 
-        line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', 
-        text=[f"{s}/6" for s in r_vals], marker=dict(size=5)
-    ))
-    fig.update_layout(
-        polar=dict(
-            radialaxis=dict(visible=True, range=[0, 6], tickvals=[1, 2, 3, 4, 5, 6], showticklabels=False, gridcolor='#444', gridwidth=1.5, layer='below traces'),
-            angularaxis=dict(direction='clockwise', rotation=90, gridcolor='rgba(0,0,0,0)', tickfont=dict(color='white', size=12)),
-            bgcolor='#232b36'
-        ),
-        paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=40, b=20, l=40, r=40), showlegend=False, height=320
-    )
+    fig = go.Figure(data=go.Scatterpolar(r=r_vals, theta=theta_vals, fill='toself', line_shape='spline', line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', text=[f"{s}/6" for s in r_vals], marker=dict(size=5)))
+    fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 6], tickvals=[1, 2, 3, 4, 5, 6], showticklabels=False, gridcolor='#444', gridwidth=1.5, layer='below traces'), angularaxis=dict(direction='clockwise', rotation=90, gridcolor='rgba(0,0,0,0)', tickfont=dict(color='white', size=12)), bgcolor='#232b36'), paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=40, b=20, l=40, r=40), showlegend=False, height=400)
     st.plotly_chart(fig, use_container_width=True)
-    
-    with st.expander("📊 Breakdown"):
-        t1, t2, t3, t4, t5 = st.tabs(["Val", "Fut", "Pst", "Hlt", "Div"])
-        with t1: 
-            st.caption(f"Score: {v_score}/6")
-            for x in v_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
-        with t2: 
-            st.caption(f"Score: {f_score}/6")
-            for x in f_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
-        with t3: 
-            st.caption(f"Score: {p_score}/6")
-            for x in p_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
-        with t4: 
-            st.caption(f"Score: {h_score}/6")
-            for x in h_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
-        with t5: 
-            st.caption(f"Score: {d_score}/6")
-            for x in d_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
+
+# Analysis Breakdown (Full Width Below)
+with st.expander("📊 See Analysis Breakdown", expanded=True):
+    t1, t2, t3, t4, t5 = st.tabs(["Valuation", "Future Growth", "Past Performance", "Financial Health", "Dividend"])
+    def print_list(items):
+        for x in items: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
+    with t1: st.markdown(f"**Score: {v_score}/6**"); print_list(v_details)
+    with t2: st.markdown(f"**Score: {f_score}/6**"); print_list(f_details)
+    with t3: st.markdown(f"**Score: {p_score}/6**"); print_list(p_details)
+    with t4: st.markdown(f"**Score: {h_score}/6**"); print_list(h_details)
+    with t5: st.markdown(f"**Score: {d_score}/6**"); print_list(d_details)
 
 st.divider()
 
@@ -500,43 +460,23 @@ def get_ret_fmt(days, fixed=None):
     except: return ""
 
 # Labels for Buttons
-tf_labels = {}
+# Note: Buttons are STATIC to prevent reset, data is in strip below
+tf_keys = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "Max"]
+if 'tf_sel' not in st.session_state: st.session_state.tf_sel = '1D'
+def update_tf(): pass
+
+# Render Buttons Below the Placeholder spot
+timeframe = st.radio("TF", tf_keys, horizontal=True, label_visibility="collapsed", key="tf_sel", on_change=update_tf)
+
+# Performance Strip (Dynamic Data)
 ytd_d = datetime(datetime.now().year, 1, 1)
 ret_1d = "(-)"
 if not perf_data.empty: ret_1d = get_ret_fmt(2)
 
-tf_labels["1D"] = f"1D {ret_1d}"
-tf_labels["5D"] = f"5D {get_ret_fmt(6)}"
-tf_labels["1M"] = f"1M {get_ret_fmt(22)}"
-tf_labels["6M"] = f"6M {get_ret_fmt(126)}"
-tf_labels["YTD"] = f"YTD {get_ret_fmt(0, ytd_d)}"
-tf_labels["1Y"] = f"1Y {get_ret_fmt(252)}"
-tf_labels["5Y"] = f"5Y {get_ret_fmt(1260)}"
-tf_labels["Max"] = f"Max {get_ret_fmt(len(perf_data)-1)}"
-
-def format_func(option): return tf_labels.get(option, option)
-
-# Buttons (Static Keys)
-tf_keys = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "Max"]
-def update_tf(): pass
-
-# Render Buttons Below the Placeholder spot
-timeframe = st.radio("TF", tf_keys, format_func=format_func, horizontal=True, label_visibility="collapsed", key="tf_sel", on_change=update_tf)
-
-# Performance Strip (Dynamic Data)
 def get_color(val_str):
     if "+" in val_str: return "pos"
     if "-" in val_str: return "neg"
     return ""
-
-v_1d = ret_1d
-v_5d = get_ret_fmt(6)
-v_1m = get_ret_fmt(22)
-v_6m = get_ret_fmt(126)
-v_ytd = get_ret_fmt(0, ytd_d)
-v_1y = get_ret_fmt(252)
-v_5y = get_ret_fmt(1260)
-v_max = get_ret_fmt(len(perf_data)-1)
 
 # Logic
 df = pd.DataFrame()
@@ -575,6 +515,15 @@ else:
     chart_placeholder.write("Price data unavailable for this timeframe.")
 
 # Performance Strip Below Buttons
+v_1d = ret_1d
+v_5d = get_ret_fmt(6)
+v_1m = get_ret_fmt(22)
+v_6m = get_ret_fmt(126)
+v_ytd = get_ret_fmt(0, ytd_d)
+v_1y = get_ret_fmt(252)
+v_5y = get_ret_fmt(1260)
+v_max = get_ret_fmt(len(perf_data)-1)
+
 st.markdown(f"""
 <div class="perf-container">
     <div class="perf-item"><span class="perf-label">1 Day</span><span class="perf-val {get_color(v_1d)}">{v_1d}</span></div>
