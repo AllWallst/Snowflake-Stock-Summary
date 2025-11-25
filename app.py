@@ -44,6 +44,8 @@ st.markdown("""
     .neg { color: #ff6384; }
     
     .check-item { margin-bottom: 8px; font-size: 0.9rem; }
+    .check-pass { color: #00d09c; margin-right: 8px; }
+    .check-fail { color: #ff6384; margin-right: 8px; }
     
     @media (max-width: 800px) {
         .perf-container { grid-template-columns: repeat(4, 1fr); gap: 15px; }
@@ -98,11 +100,11 @@ if "ticker" not in st.query_params:
     st.query_params["ticker"] = "AAPL"
 ticker = st.query_params["ticker"]
 
-# Initialize session state for valuation method if not present
 if 'val_method' not in st.session_state:
     st.session_state.val_method = "Discounted Cash Flow (DCF)"
 
 # --- FETCH DATA ---
+news_list = [] # Initialize empty to prevent NameError
 try:
     stock = yf.Ticker(ticker)
     info = stock.info
@@ -117,6 +119,7 @@ try:
     balance_sheet = stock.balance_sheet.T
     cash_flow = stock.cashflow.T
     div_history = stock.dividends
+    news_list = stock.news # Fetch news here
     
 except Exception as e:
     st.error(f"Error fetching data: {e}")
@@ -185,7 +188,7 @@ graham_fv = calc_graham(info)
 dcf_fv, dcf_growth = calc_dcf(stock, info)
 analyst_fv = info.get('targetMeanPrice', 0)
 
-# Use Session State for Valuation Method (so it updates the top snowflake)
+# Use Session State for Valuation Method
 val_method = st.session_state.val_method
 
 if val_method == "Discounted Cash Flow (DCF)":
@@ -212,11 +215,11 @@ def check(condition, text):
 v_score = 0
 v_details = []
 s, t = check(current_price < fair_value, f"Below Fair Value ({current_price:.2f} < {fair_value:.2f})"); v_score+=s; v_details.append(t)
-s, t = check(current_price < fair_value * 0.8, f"Significantly Below Fair Value (>20%)"); v_score+=s; v_details.append(t)
+s, t = check(current_price < fair_value * 0.8, f"Significantly Below Fair Value ({current_price:.2f} < {(fair_value*0.8):.2f})"); v_score+=s; v_details.append(t)
 s, t = check(pe > 0 and pe < 25, f"P/E ({pe:.1f}x) < Market (25x)"); v_score+=s; v_details.append(t)
 s, t = check(pe > 0 and pe < 35, f"P/E ({pe:.1f}x) < Peers (35x)"); v_score+=s; v_details.append(t)
-s, t = check(peg > 0 and peg < 1.5, f"PEG ({peg:.2f}) < 1.5x"); v_score+=s; v_details.append(t)
-s, t = check(current_price < analyst_fv, f"Below Analyst Target ({analyst_fv:.2f})"); v_score+=s; v_details.append(t)
+s, t = check(peg > 0 and peg < 1.5, f"PEG Ratio within ideal range ({peg:.2f} < 1.5x)"); v_score+=s; v_details.append(t)
+s, t = check(current_price < analyst_fv, f"Below Analyst Target ({current_price:.2f} < {analyst_fv:.2f})"); v_score+=s; v_details.append(t)
 
 # 2. FUTURE GROWTH
 f_score = 0
@@ -237,6 +240,7 @@ s, t = check(roe > 0.20, f"High Future ROE ({roe*100:.1f}%) > 20%"); f_score+=s;
 # 3. PAST PERFORMANCE
 p_score = 0
 p_details = []
+eps_growth_1y = 0 # Init safe default
 try:
     hist_fin = financials.sort_index()
     hist_bs = balance_sheet.sort_index()
@@ -280,8 +284,8 @@ try:
     total_debt = get_debt(balance_sheet)
     equity = get_val(balance_sheet, ['Stockholders Equity', 'Total Stockholder Equity'])
     cash_bs = get_val(balance_sheet, ['Cash And Cash Equivalents', 'Cash', 'Cash Financial'])
-    ebit = get_val(financials, ['EBIT', 'Operating Income'])
-    interest = abs(get_val(financials, ['Interest Expense', 'Interest Expense Non Operating']))
+    ebit = get_val(financials, ['EBIT', 'Operating Income', 'Net Income'])
+    interest = abs(get_val(financials, ['Interest Expense', 'Interest Expense Non Operating', 'Total Interest Expenses']))
     ocf = get_val(cash_flow, ['Operating Cash Flow', 'Total Cash From Operating Activities'])
 
     if curr_assets > 0 and curr_liab > 0: s, t = check(curr_assets > curr_liab, "Short Term Assets > Short Term Liab"); h_score+=s; h_details.append(t)
@@ -361,7 +365,7 @@ with col1:
 
     # --- PRICE HISTORY ---
     st.subheader("Price History")
-    # Selector below chart container (Logic separation)
+    # Selector below chart container
     chart_ph = st.empty()
     
     # Static keys for buttons
@@ -392,11 +396,7 @@ with col1:
     # Use 1D intraday if available for 1D label
     ret_1d = "(-)"
     if not perf_data.empty:
-        ret_1d = get_ret_fmt(2) # fallback
-    
-    # Map keys to formatted labels
-    # Note: We display static keys in buttons, but show strip below or inside button?
-    # Request: "put the percent values inside the Timeframe Selectors"
+        ret_1d = get_ret_fmt(2) 
     
     tf_labels["1D"] = f"1D {ret_1d}"
     tf_labels["5D"] = f"5D {get_ret_fmt(6)}"
