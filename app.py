@@ -104,7 +104,7 @@ if 'val_method' not in st.session_state:
     st.session_state.val_method = "Discounted Cash Flow (DCF)"
 
 # --- FETCH DATA ---
-news_list = [] # Initialize empty to prevent NameError
+news_list = [] 
 try:
     stock = yf.Ticker(ticker)
     info = stock.info
@@ -119,13 +119,64 @@ try:
     balance_sheet = stock.balance_sheet.T
     cash_flow = stock.cashflow.T
     div_history = stock.dividends
-    news_list = stock.news # Fetch news here
+    news_list = stock.news
     
 except Exception as e:
     st.error(f"Error fetching data: {e}")
     st.stop()
 
-# --- CALCULATION FUNCTIONS ---
+# --- HELPER FUNCTIONS (MOVED TO TOP FOR SCOPE SAFETY) ---
+
+def get_val(df, keys_list):
+    for k in keys_list:
+        if k in df.columns:
+            val = df[k].iloc[0]
+            if pd.notna(val): return val
+    return 0
+
+def get_debt(df):
+    d = get_val(df, ['Total Debt', 'Total Financial Debt'])
+    if d == 0:
+        long_term = get_val(df, ['Long Term Debt', 'Long Term Debt And Capital Lease Obligation'])
+        short_term = get_val(df, ['Current Debt', 'Current Debt And Capital Lease Obligation', 'Commercial Paper'])
+        d = long_term + short_term
+    return d
+
+def fmt_num(num):
+    if num is None or num == 0: return "N/A"
+    if abs(num) >= 1e9: return f"${num/1e9:.1f}B"
+    if abs(num) >= 1e6: return f"${num/1e6:.1f}M"
+    return f"${num:.2f}"
+
+def get_news_data(article):
+    title = article.get('title')
+    if not title and 'content' in article: title = article['content'].get('title')
+    if not title: title = article.get('headline', 'No Title Available')
+    
+    link = article.get('link')
+    if isinstance(link, dict): link = link.get('url')
+    if not link and 'content' in article:
+        link = article['content'].get('link') or article['content'].get('canonicalUrl')
+        if isinstance(link, dict): link = link.get('url')
+    if not link: link = article.get('clickThroughUrl', 'https://finance.yahoo.com')
+    
+    publisher = "Unknown"
+    if 'provider' in article:
+        provider = article['provider']
+        if isinstance(provider, dict): publisher = provider.get('displayName') or provider.get('title') or "Unknown"
+    elif 'publisher' in article:
+        pub = article['publisher']
+        if isinstance(pub, dict): publisher = pub.get('title') or pub.get('name') or "Unknown"
+        else: publisher = str(pub)
+    
+    if publisher == "Unknown" and link:
+        try:
+            domain = urlparse(link).netloc
+            clean_domain = domain.replace('www.', '').split('.')[0]
+            if clean_domain: publisher = clean_domain.capitalize()
+        except: pass
+    return title, link, publisher, article.get('providerPublishTime', 0)
+
 def calc_graham(info):
     eps = info.get('trailingEps', 0)
     bv = info.get('bookValue', 0)
@@ -148,28 +199,6 @@ def calc_dcf(stock, info):
         dcf_val = (sum(future_cash_flows) + (term_val / ((1 + discount_rate) ** 5))) / info.get('sharesOutstanding', 1)
         return dcf_val, growth_rate
     except: return 0, 0
-
-# --- HELPER: ROBUST DATA EXTRACTION ---
-def get_val(df, keys_list):
-    for k in keys_list:
-        if k in df.columns:
-            val = df[k].iloc[0]
-            if pd.notna(val): return val
-    return 0
-
-def get_debt(df):
-    d = get_val(df, ['Total Debt', 'Total Financial Debt'])
-    if d == 0:
-        long_term = get_val(df, ['Long Term Debt', 'Long Term Debt And Capital Lease Obligation'])
-        short_term = get_val(df, ['Current Debt', 'Current Debt And Capital Lease Obligation', 'Commercial Paper'])
-        d = long_term + short_term
-    return d
-
-def fmt_num(num):
-    if num is None or num == 0: return "N/A"
-    if abs(num) >= 1e9: return f"${num/1e9:.1f}B"
-    if abs(num) >= 1e6: return f"${num/1e6:.1f}M"
-    return f"${num:.2f}"
 
 # --- VARIABLE EXTRACTION ---
 div_rate = info.get('dividendRate', 0)
@@ -230,6 +259,7 @@ if peg > 0 and pe > 0: g_rate = (pe / peg) / 100
 elif f_eps > 0 and t_eps > 0: g_rate = (f_eps - t_eps) / t_eps
 else: g_rate = info.get('earningsGrowth', 0) or 0
 rev_g = info.get('revenueGrowth', 0) or 0
+
 s, t = check(g_rate > 0.02, f"Earnings Growth ({g_rate*100:.1f}%) > Savings Rate (2%)"); f_score+=s; f_details.append(t)
 s, t = check(g_rate > 0.10, f"Earnings Growth ({g_rate*100:.1f}%) > Market Avg (10%)"); f_score+=s; f_details.append(t)
 s, t = check(g_rate > 0.20, f"High Growth Earnings > 20%"); f_score+=s; f_details.append(t)
@@ -282,11 +312,11 @@ try:
     curr_liab = get_val(balance_sheet, ['Current Liabilities', 'Total Current Liabilities'])
     total_liab = get_val(balance_sheet, ['Total Liabilities Net Minority Interest', 'Total Liabilities'])
     total_debt = get_debt(balance_sheet)
-    equity = get_val(balance_sheet, ['Stockholders Equity', 'Total Stockholder Equity'])
+    equity = get_val(balance_sheet, ['Stockholders Equity', 'Total Stockholder Equity', 'Total Equity Gross Minority Interest'])
     cash_bs = get_val(balance_sheet, ['Cash And Cash Equivalents', 'Cash', 'Cash Financial'])
     ebit = get_val(financials, ['EBIT', 'Operating Income', 'Net Income'])
     interest = abs(get_val(financials, ['Interest Expense', 'Interest Expense Non Operating', 'Total Interest Expenses']))
-    ocf = get_val(cash_flow, ['Operating Cash Flow', 'Total Cash From Operating Activities'])
+    ocf = get_val(cash_flow, ['Operating Cash Flow', 'Total Cash From Operating Activities', 'Cash Flow From Continuing Operating Activities'])
 
     if curr_assets > 0 and curr_liab > 0: s, t = check(curr_assets > curr_liab, "Short Term Assets > Short Term Liab"); h_score+=s; h_details.append(t)
     else: h_score+=0; h_details.append("❌ Short Term Check (Bank/N/A)")
