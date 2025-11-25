@@ -24,31 +24,52 @@ st.markdown("""
     .news-meta { color: #8c97a7; font-size: 0.85em; }
     div[data-baseweb="select"] > div { background-color: #2c3542; color: white; border-color: #444; }
     
-    /* Timeframe Buttons */
-    div[data-testid="stRadio"] > div { display: flex; justify-content: center; gap: 5px; width: 100%; flex-wrap: wrap; }
+    /* Timeframe Buttons - Centered and Styled */
+    div[data-testid="stRadio"] > div { 
+        display: flex; 
+        justify-content: center;
+        flex-wrap: wrap;
+        gap: 5px; 
+        width: 100%;
+    }
     div[data-testid="stRadio"] label {
-        background-color: #232b36; padding: 5px 10px; border-radius: 5px; border: 1px solid #36404e;
-        cursor: pointer; flex-grow: 1; text-align: center; font-size: 0.9rem;
+        background-color: #232b36;
+        padding: 5px 10px;
+        border-radius: 5px;
+        border: 1px solid #36404e;
+        cursor: pointer;
+        flex-grow: 1;
+        text-align: center;
+        font-size: 0.9rem;
     }
     div[data-testid="stRadio"] label:hover { border-color: #00d09c; color: #00d09c; }
     
+    /* Performance Grid Styles */
     .perf-container {
-        display: grid; grid-template-columns: repeat(8, 1fr); gap: 10px;
-        margin-top: 10px; margin-bottom: 20px; background-color: #232b36;
-        padding: 15px; border-radius: 10px; text-align: center;
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        gap: 5px;
+        margin-top: 15px;
+        margin-bottom: 20px;
+        padding: 10px;
+        border-radius: 10px;
+        text-align: center;
+        background-color: #181e26;
+        border: 1px solid #36404e;
     }
     .perf-item { display: flex; flex-direction: column; }
-    .perf-label { color: #8c97a7; font-size: 0.8rem; margin-bottom: 5px; }
-    .perf-val { font-weight: bold; font-size: 1rem; }
+    .perf-label { color: #8c97a7; font-size: 0.75rem; margin-bottom: 2px; }
+    .perf-val { font-weight: bold; font-size: 0.95rem; }
     .pos { color: #00d09c; }
     .neg { color: #ff6384; }
     
+    /* Checklist Styles */
     .check-item { margin-bottom: 8px; font-size: 0.9rem; }
     .check-pass { color: #00d09c; margin-right: 8px; }
     .check-fail { color: #ff6384; margin-right: 8px; }
     
     @media (max-width: 800px) {
-        .perf-container { grid-template-columns: repeat(4, 1fr); gap: 15px; }
+        .perf-container { grid-template-columns: repeat(4, 1fr); gap: 10px; }
     }
     </style>
 """, unsafe_allow_html=True)
@@ -74,34 +95,38 @@ def search_symbol(query):
     except:
         return []
 
-# --- TOP SEARCH BAR ---
-col_search1, col_search2 = st.columns([1, 3])
-with col_search1:
-    exchange = st.selectbox("Region", ["All / US", "Canada (TSX) .TO", "Canada (Venture) .V", "UK (London) .L", "Australia .AX", "India .NS"])
-with col_search2:
-    search_query = st.text_input("🔎 Search Stock (Company Name or Ticker)", placeholder="e.g. Apple, Shopify, RY.TO...")
-
-# Handle Search Logic
-if search_query:
-    search_results = search_symbol(search_query)
-    if "Canada (TSX)" in exchange: search_results = [x for x in search_results if ".TO" in x[1]]
-    elif "Venture" in exchange: search_results = [x for x in search_results if ".V" in x[1]]
-        
-    if search_results:
-        selected_option = st.selectbox("Select Match:", options=[x[0] for x in search_results], key="search_select")
-        if st.button("Analyze Stock"):
-            st.query_params["ticker"] = selected_option.split(" - ")[0]
-            st.rerun()
-    else:
-        st.warning("No matching stocks found.")
-
 # --- URL & STATE MANAGEMENT ---
 if "ticker" not in st.query_params:
     st.query_params["ticker"] = "AAPL"
-ticker = st.query_params["ticker"]
 
-if 'val_method' not in st.session_state:
-    st.session_state.val_method = "Discounted Cash Flow (DCF)"
+current_ticker = st.query_params["ticker"]
+
+# --- SIDEBAR ---
+with st.sidebar:
+    st.title("📡 MarketRadar")
+    
+    st.markdown("### 🔎 Symbol Lookup")
+    exchange = st.selectbox("Market / Region", ["All / US", "Canada (TSX) .TO", "Canada (Venture) .V", "UK (London) .L", "Australia .AX", "India .NS"])
+    search_query = st.text_input("Search Company or Ticker", placeholder="e.g. Shopify, Apple...")
+    
+    if search_query:
+        search_results = search_symbol(search_query)
+        if "Canada (TSX)" in exchange: search_results = [x for x in search_results if ".TO" in x[1]]
+        elif "Venture" in exchange: search_results = [x for x in search_results if ".V" in x[1]]
+            
+        if search_results:
+            selected_option = st.selectbox("Select Stock:", options=[x[0] for x in search_results], key="search_select")
+            if st.button("Go"):
+                st.query_params["ticker"] = selected_option.split(" - ")[0]
+                st.rerun()
+        else:
+            st.caption("No matching stocks found.")
+
+    st.divider()
+    st.markdown("### ⚙️ Settings")
+    val_method = st.radio("Fair Value Method", ["Discounted Cash Flow (DCF)", "Graham Formula", "Analyst Target"])
+
+ticker = st.query_params["ticker"]
 
 # --- FETCH DATA ---
 news_list = [] 
@@ -271,9 +296,9 @@ else: g_rate = info.get('earningsGrowth', 0) or 0
 rev_g = info.get('revenueGrowth', 0) or 0
 s, t = check(g_rate > 0.02, f"Earnings Growth ({g_rate*100:.1f}%) > Savings Rate (2%)"); f_score+=s; f_details.append(t)
 s, t = check(g_rate > 0.10, f"Earnings Growth ({g_rate*100:.1f}%) > Market Avg (10%)"); f_score+=s; f_details.append(t)
-s, t = check(g_rate > 0.20, f"High Growth Earnings > 20%"); f_score+=s; f_details.append(t)
+s, t = check(g_rate > 0.20, f"High Growth Earnings ({g_rate*100:.1f}%) > 20%"); f_score+=s; f_details.append(t)
 s, t = check(rev_g > 0.10, f"Revenue Growth ({rev_g*100:.1f}%) > Market Avg (10%)"); f_score+=s; f_details.append(t)
-s, t = check(rev_g > 0.20, f"High Growth Revenue > 20%"); f_score+=s; f_details.append(t)
+s, t = check(rev_g > 0.20, f"High Growth Revenue ({rev_g*100:.1f}%) > 20%"); f_score+=s; f_details.append(t)
 s, t = check(roe > 0.20, f"High Future ROE ({roe*100:.1f}%) > 20%"); f_score+=s; f_details.append(t)
 
 # 3. PAST PERFORMANCE
@@ -374,7 +399,7 @@ payout = info.get('payoutRatio', 0) or 0
 s, t = check(payout < 0.90 and dy > 0, f"Earnings Coverage (Payout {payout*100:.0f}%)"); d_score+=s; d_details.append(t)
 cf_cover = False
 try:
-    div_paid = abs(get_val(cash_flow, ['Cash Dividends Paid', 'Common Stock Dividend Paid']))
+    div_paid = abs(get_val(cash_flow, ['Cash Dividends Paid']))
     fcf = get_val(cash_flow, ['Free Cash Flow'])
     if div_paid < fcf and dy > 0: cf_cover = True
     s, t = check(cf_cover, "Cash Flow Coverage"); d_score+=s; d_details.append(t)
@@ -388,45 +413,49 @@ else: flake_color = "#00d09c"
 def hex_to_rgba(h, alpha): return tuple(int(h.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)) + (alpha,)
 fill_rgba = f"rgba{hex_to_rgba(flake_color, 0.4)}"
 
-# --- MAIN HEADER ---
+# --- MAIN LAYOUT ---
+
 st.markdown(f"### {info.get('shortName', ticker)} ({ticker})")
 st.write(info.get('longBusinessSummary', '')[:350] + "...")
 
-# --- METRICS ROW (GAUGES + NUMBERS) ---
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Price", f"${current_price:.2f}")
-m2.metric("Market Cap", f"${(info.get('marketCap',0)/1e9):.1f}B")
-m3.metric("Beta", f"{info.get('beta', 0):.2f}")
-m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
+col1, col2 = st.columns([2, 1])
 
-g1, g2, g3 = st.columns(3)
-g1.plotly_chart(create_gauge(beta, 0, 3, "Beta", suffix="x"), use_container_width=True)
-g2.plotly_chart(create_gauge(info.get('marketCap',0)/1e9, 0, 3000, "Market Cap ($B)", color="#36a2eb"), use_container_width=True)
-g3.plotly_chart(create_gauge(current_price, 0, current_price*1.5, "Price ($)"), use_container_width=True)
+with col1:
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Price", f"${current_price:.2f}")
+    m2.metric("Market Cap", f"${(info.get('marketCap',0)/1e9):.1f}B")
+    m3.metric("Beta", f"{info.get('beta', 0):.2f}")
+    m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
 
-st.divider()
+    g1, g2, g3 = st.columns(3)
+    g1.plotly_chart(create_gauge(beta, 0, 3, "Beta", suffix="x"), use_container_width=True)
+    g2.plotly_chart(create_gauge(info.get('marketCap',0)/1e9, 0, 3000, "Market Cap ($B)", color="#36a2eb"), use_container_width=True)
+    g3.plotly_chart(create_gauge(current_price, 0, current_price*1.5, "Price ($)"), use_container_width=True)
 
-# --- SNOWFLAKE & ANALYSIS BREAKDOWN ---
-st.header("Fundamental Analysis")
-col_snow, col_breakdown = st.columns([1, 2])
-
-with col_snow:
-    r_v = final_scores + [final_scores[0]]
-    theta_v = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
-    fig = go.Figure(data=go.Scatterpolar(r=r_v, theta=theta_v, fill='toself', line_shape='spline', line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', text=[f"{s}/6" for s in r_v], marker=dict(size=5)))
+with col2:
+    # --- SNOWFLAKE ---
+    r_vals = final_scores + [final_scores[0]]
+    theta_vals = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
+    fig = go.Figure(data=go.Scatterpolar(r=r_vals, theta=theta_vals, fill='toself', line_shape='spline', line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', text=[f"{s}/6" for s in r_vals], marker=dict(size=5)))
     fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 6], tickvals=[1, 2, 3, 4, 5, 6], showticklabels=False, gridcolor='#444', gridwidth=1.5, layer='below traces'), angularaxis=dict(direction='clockwise', rotation=90, gridcolor='rgba(0,0,0,0)', tickfont=dict(color='white', size=12)), bgcolor='#232b36'), paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=40, b=20, l=40, r=40), showlegend=False, height=400)
     st.plotly_chart(fig, use_container_width=True)
-
-with col_breakdown:
-    st.subheader("Analysis Breakdown")
-    t1, t2, t3, t4, t5 = st.tabs(["Valuation", "Future Growth", "Past Performance", "Financial Health", "Dividend"])
-    def print_list(items):
-        for x in items: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
-    with t1: st.markdown(f"**Score: {v_score}/6**"); print_list(v_details)
-    with t2: st.markdown(f"**Score: {f_score}/6**"); print_list(f_details)
-    with t3: st.markdown(f"**Score: {p_score}/6**"); print_list(p_details)
-    with t4: st.markdown(f"**Score: {h_score}/6**"); print_list(h_details)
-    with t5: st.markdown(f"**Score: {d_score}/6**"); print_list(d_details)
+    with st.expander("📊 Breakdown"):
+        t1, t2, t3, t4, t5 = st.tabs(["Val", "Fut", "Pst", "Hlt", "Div"])
+        with t1: 
+            st.caption(f"Score: {v_score}/6")
+            for x in v_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
+        with t2: 
+            st.caption(f"Score: {f_score}/6")
+            for x in f_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
+        with t3: 
+            st.caption(f"Score: {p_score}/6")
+            for x in p_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
+        with t4: 
+            st.caption(f"Score: {h_score}/6")
+            for x in h_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
+        with t5: 
+            st.caption(f"Score: {d_score}/6")
+            for x in d_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
 
 st.divider()
 
@@ -479,7 +508,7 @@ if 'tf_sel' not in st.session_state: st.session_state.tf_sel = '1D'
 def update_tf(): pass
 
 # Render Buttons Below the Placeholder spot
-timeframe = st.radio("TF", tf_keys, format_func=format_func, horizontal=True, label_visibility="collapsed", key="tf_sel", on_change=update_tf)
+timeframe = st.radio("TF", tf_keys, horizontal=True, label_visibility="collapsed", key="tf_sel", on_change=update_tf)
 
 # Performance Strip (Dynamic Data)
 ytd_d = datetime(datetime.now().year, 1, 1)
@@ -640,19 +669,12 @@ st.divider()
 st.header("5. Dividend")
 d1, d2 = st.columns(2)
 with d1:
-    # Larger Gauge
-    fig_d = go.Figure(go.Indicator(
-        mode = "gauge+number", value = dy * 100, title = {'text': "Dividend Yield"},
-        gauge = {'axis': {'range': [0, max(6, dy*100)]}, 'bar': {'color': "#00d09c"}, 'steps': [{'range': [0, 1.5], 'color': "#ff6384"}], 'threshold': {'line': {'color': "white", 'width': 4}, 'thickness': 0.75, 'value': 1.5}}
-    ))
-    fig_d.update_layout(paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), height=320, margin=dict(t=50, b=10, l=10, r=10))
-    st.plotly_chart(fig_d, use_container_width=True)
+    st.plotly_chart(create_gauge(dy*100, 0, max(6, dy*100), "Dividend Yield", suffix="%"), use_container_width=True)
 with d2:
-    # Larger Pie
     payout = info.get('payoutRatio', 0) or 0
     if payout > 0:
         fig_pay = go.Figure(data=[go.Pie(labels=['Payout', 'Retained'], values=[payout, 1-payout], hole=.7, marker=dict(colors=['#36a2eb', '#232b36']))])
-        fig_pay.update_layout(showlegend=False, height=320, margin=dict(t=0, b=0, l=0, r=0), paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white', size=20), annotations=[dict(text=f"{payout*100:.0f}%", x=0.5, y=0.5, font_size=30, showarrow=False)])
+        fig_pay.update_layout(showlegend=False, height=300, margin=dict(t=20, b=20, l=20, r=20), paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), annotations=[dict(text=f"{payout*100:.0f}%", x=0.5, y=0.5, font_size=24, showarrow=False)])
         st.plotly_chart(fig_pay, use_container_width=True)
     else: st.write("No Dividend Payout")
 
