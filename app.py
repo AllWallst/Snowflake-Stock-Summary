@@ -403,17 +403,19 @@ fill_rgba = f"rgba{hex_to_rgba(flake_color, 0.4)}"
 st.markdown(f"### {info.get('shortName', ticker)} ({ticker})")
 st.write(info.get('longBusinessSummary', '')[:350] + "...")
 
-# --- METRICS ROW (GAUGES + NUMBERS) ---
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Price", f"${current_price:.2f}")
-m2.metric("Market Cap", f"${(info.get('marketCap',0)/1e9):.1f}B")
-m3.metric("Beta", f"{info.get('beta', 0):.2f}")
-m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
+col1, col2 = st.columns([2, 1])
 
-g1, g2, g3 = st.columns(3)
-g1.plotly_chart(create_gauge(beta, 0, 3, "Beta", suffix="x"), use_container_width=True)
-g2.plotly_chart(create_gauge(info.get('marketCap',0)/1e9, 0, 3000, "Market Cap ($B)", color="#36a2eb"), use_container_width=True)
-g3.plotly_chart(create_gauge(current_price, 0, current_price*1.5, "Price ($)"), use_container_width=True)
+with col1:
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Price", f"${current_price:.2f}")
+    m2.metric("Market Cap", f"${(info.get('marketCap',0)/1e9):.1f}B")
+    m3.metric("Beta", f"{info.get('beta', 0):.2f}")
+    m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
+
+    g1, g2, g3 = st.columns(3)
+    g1.plotly_chart(create_gauge(beta, 0, 3, "Beta", suffix="x"), use_container_width=True)
+    g2.plotly_chart(create_gauge(info.get('marketCap',0)/1e9, 0, 3000, "Market Cap ($B)", color="#36a2eb"), use_container_width=True)
+    g3.plotly_chart(create_gauge(current_price, 0, current_price*1.5, "Price ($)"), use_container_width=True)
 
 st.divider()
 
@@ -578,20 +580,18 @@ st.divider()
 st.header("2. Future Growth")
 f1, f2 = st.columns(2)
 with f1:
+    # --- REPLACED LINES 577-596 WITH THIS ---
     fig_f = go.Figure(data=[
-        go.Bar(name='Company', x=['Growth'], y=[g_rate*100], marker_color='#36a2eb', text=[f"{g_rate*100:.1f}%"]),
-        go.Bar(name='Market', x=['Growth'], y=[0.10*100], marker_color='#ff6384', text=["10.0%"]),
-        go.Bar(name='Savings', x=['Growth'], y=[0.02*100], marker_color='#ffce56', text=["2.0%"])
+        go.Bar(name='Company', x=['Growth'], y=[g_rate*100], marker_color='#36a2eb', text=[f"{g_rate*100:.1f}%"], textposition='auto'),
+        go.Bar(name='Market', x=['Growth'], y=[10.0], marker_color='#ff6384', text=["10.0%"], textposition='auto'),
+        go.Bar(name='Savings', x=['Growth'], y=[2.0], marker_color='#ffce56', text=["2.0%"], textposition='auto')
     ])
-    fig_f.update_layout(barmode='group', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), title="Annual Forecast", height=300)
+    fig_f.update_layout(barmode='group', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), title="Annual Forecast", height=250, showlegend=True, margin=dict(t=30, b=10, l=10, r=10))
     st.plotly_chart(fig_f, use_container_width=True)
 with f2:
-    fig_roe = go.Figure(go.Indicator(
-        mode = "number+gauge", value = roe*100, title = {'text': "Future ROE Est."},
-        gauge = {'shape': "bullet", 'axis': {'range': [0, 100]}, 'threshold': {'line': {'color': "white", 'width': 2}, 'thickness': 0.75, 'value': 20}}
-    ))
-    fig_roe.update_layout(paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), height=250)
-    st.plotly_chart(fig_roe, use_container_width=True)
+    # Replaced Bullet with Gauge per request "choose a better graph"
+    st.plotly_chart(create_gauge(roe*100, 0, max(30, roe*100), "Future Return on Equity (ROE)", suffix="%"), use_container_width=True)
+    # --- END REPLACEMENT ---
 
 st.divider()
 
