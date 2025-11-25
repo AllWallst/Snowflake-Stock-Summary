@@ -29,18 +29,21 @@ st.markdown("""
         display: flex; 
         justify-content: center;
         flex-wrap: wrap;
-        gap: 5px; 
+        gap: 0px; 
         width: 100%;
+        margin-bottom: 10px;
     }
     div[data-testid="stRadio"] label {
         background-color: #232b36;
-        padding: 5px 15px;
-        border-radius: 5px;
+        padding: 6px 16px;
+        border-radius: 4px;
         border: 1px solid #36404e;
         cursor: pointer;
         flex-grow: 1;
         text-align: center;
         font-size: 0.9rem;
+        margin: 0 2px;
+        transition: all 0.2s;
     }
     div[data-testid="stRadio"] label:hover { border-color: #00d09c; color: #00d09c; }
     
@@ -49,7 +52,7 @@ st.markdown("""
         display: grid;
         grid-template-columns: repeat(8, 1fr);
         gap: 5px;
-        margin-top: 15px;
+        margin-top: 5px;
         margin-bottom: 20px;
         padding: 10px;
         border-radius: 10px;
@@ -95,38 +98,34 @@ def search_symbol(query):
     except:
         return []
 
+# --- TOP SEARCH BAR ---
+col_search1, col_search2 = st.columns([1, 3])
+with col_search1:
+    exchange = st.selectbox("Region", ["All / US", "Canada (TSX) .TO", "Canada (Venture) .V", "UK (London) .L", "Australia .AX", "India .NS"])
+with col_search2:
+    search_query = st.text_input("🔎 Search Stock (Company Name or Ticker)", placeholder="e.g. Apple, Shopify, RY.TO...")
+
+# Handle Search Logic
+if search_query:
+    search_results = search_symbol(search_query)
+    if "Canada (TSX)" in exchange: search_results = [x for x in search_results if ".TO" in x[1]]
+    elif "Venture" in exchange: search_results = [x for x in search_results if ".V" in x[1]]
+        
+    if search_results:
+        selected_option = st.selectbox("Select Match:", options=[x[0] for x in search_results], key="search_select")
+        if st.button("Analyze Stock"):
+            st.query_params["ticker"] = selected_option.split(" - ")[0]
+            st.rerun()
+    else:
+        st.warning("No matching stocks found.")
+
 # --- URL & STATE MANAGEMENT ---
 if "ticker" not in st.query_params:
     st.query_params["ticker"] = "AAPL"
-
-current_ticker = st.query_params["ticker"]
-
-# --- SIDEBAR ---
-with st.sidebar:
-    st.title("📡 MarketRadar")
-    
-    st.markdown("### 🔎 Symbol Lookup")
-    exchange = st.selectbox("Market / Region", ["All / US", "Canada (TSX) .TO", "Canada (Venture) .V", "UK (London) .L", "Australia .AX", "India .NS"])
-    search_query = st.text_input("Search Company or Ticker", placeholder="e.g. Shopify, Apple...")
-    
-    if search_query:
-        search_results = search_symbol(search_query)
-        if "Canada (TSX)" in exchange: search_results = [x for x in search_results if ".TO" in x[1]]
-        elif "Venture" in exchange: search_results = [x for x in search_results if ".V" in x[1]]
-            
-        if search_results:
-            selected_option = st.selectbox("Select Stock:", options=[x[0] for x in search_results], key="search_select")
-            if st.button("Go"):
-                st.query_params["ticker"] = selected_option.split(" - ")[0]
-                st.rerun()
-        else:
-            st.caption("No matching stocks found.")
-
-    st.divider()
-    st.markdown("### ⚙️ Settings")
-    val_method = st.radio("Fair Value Method", ["Discounted Cash Flow (DCF)", "Graham Formula", "Analyst Target"])
-
 ticker = st.query_params["ticker"]
+
+if 'val_method' not in st.session_state:
+    st.session_state.val_method = "Discounted Cash Flow (DCF)"
 
 # --- FETCH DATA ---
 news_list = [] 
@@ -294,7 +293,6 @@ if peg > 0 and pe > 0: g_rate = (pe / peg) / 100
 elif f_eps > 0 and t_eps > 0: g_rate = (f_eps - t_eps) / t_eps
 else: g_rate = info.get('earningsGrowth', 0) or 0
 rev_g = info.get('revenueGrowth', 0) or 0
-
 s, t = check(g_rate > 0.02, f"Earnings Growth ({g_rate*100:.1f}%) > Savings Rate (2%)"); f_score+=s; f_details.append(t)
 s, t = check(g_rate > 0.10, f"Earnings Growth ({g_rate*100:.1f}%) > Market Avg (10%)"); f_score+=s; f_details.append(t)
 s, t = check(g_rate > 0.20, f"High Growth Earnings > 20%"); f_score+=s; f_details.append(t)
@@ -414,61 +412,47 @@ else: flake_color = "#00d09c"
 def hex_to_rgba(h, alpha): return tuple(int(h.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)) + (alpha,)
 fill_rgba = f"rgba{hex_to_rgba(flake_color, 0.4)}"
 
-# --- MAIN LAYOUT ---
-
+# --- MAIN HEADER ---
 st.markdown(f"### {info.get('shortName', ticker)} ({ticker})")
 st.write(info.get('longBusinessSummary', '')[:350] + "...")
 
-col1, col2 = st.columns([2, 1])
+# --- METRICS ROW (GAUGES + NUMBERS) ---
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Price", f"${current_price:.2f}")
+m2.metric("Market Cap", f"${(info.get('marketCap',0)/1e9):.1f}B")
+m3.metric("Beta", f"{info.get('beta', 0):.2f}")
+m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
 
-with col1:
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Price", f"${current_price:.2f}")
-    m2.metric("Market Cap", f"${(info.get('marketCap',0)/1e9):.1f}B")
-    m3.metric("Beta", f"{info.get('beta', 0):.2f}")
-    m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
-    
-    g1, g2, g3 = st.columns(3)
-    g1.plotly_chart(create_gauge(beta, 0, 3, "Beta", suffix="x"), use_container_width=True)
-    g2.plotly_chart(create_gauge(info.get('marketCap',0)/1e9, 0, 3000, "Market Cap ($B)", color="#36a2eb"), use_container_width=True)
-    g3.plotly_chart(create_gauge(current_price, 0, current_price*1.5, "Price ($)"), use_container_width=True)
+g1, g2, g3 = st.columns(3)
+g1.plotly_chart(create_gauge(beta, 0, 3, "Beta", suffix="x"), use_container_width=True)
+g2.plotly_chart(create_gauge(info.get('marketCap',0)/1e9, 0, 3000, "Market Cap ($B)", color="#36a2eb"), use_container_width=True)
+g3.plotly_chart(create_gauge(current_price, 0, current_price*1.5, "Price ($)"), use_container_width=True)
 
-with col2:
-    # --- SNOWFLAKE ---
+st.divider()
+
+# --- SNOWFLAKE & ANALYSIS BREAKDOWN ---
+st.header("Fundamental Analysis")
+
+# Centered Snowflake with Columns
+c_left, c_center, c_right = st.columns([1, 2, 1])
+
+with c_center:
     r_vals = final_scores + [final_scores[0]]
     theta_vals = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
-    fig = go.Figure(data=go.Scatterpolar(
-        r=r_vals, theta=theta_vals, fill='toself', line_shape='spline', 
-        line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', 
-        text=[f"{s}/6" for s in r_vals], marker=dict(size=5)
-    ))
-    fig.update_layout(
-        polar=dict(
-            radialaxis=dict(visible=True, range=[0, 6], tickvals=[1, 2, 3, 4, 5, 6], showticklabels=False, gridcolor='#444', gridwidth=1.5, layer='below traces'),
-            angularaxis=dict(direction='clockwise', rotation=90, gridcolor='rgba(0,0,0,0)', tickfont=dict(color='white', size=12)),
-            bgcolor='#232b36'
-        ),
-        paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=40, b=20, l=40, r=40), showlegend=False, height=320
-    )
+    fig = go.Figure(data=go.Scatterpolar(r=r_vals, theta=theta_vals, fill='toself', line_shape='spline', line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', text=[f"{s}/6" for s in r_vals], marker=dict(size=5)))
+    fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 6], tickvals=[1, 2, 3, 4, 5, 6], showticklabels=False, gridcolor='#444', gridwidth=1.5, layer='below traces'), angularaxis=dict(direction='clockwise', rotation=90, gridcolor='rgba(0,0,0,0)', tickfont=dict(color='white', size=12)), bgcolor='#232b36'), paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=40, b=20, l=40, r=40), showlegend=False, height=400)
     st.plotly_chart(fig, use_container_width=True)
-    
-    with st.expander("📊 Breakdown"):
-        t1, t2, t3, t4, t5 = st.tabs(["Val", "Fut", "Pst", "Hlt", "Div"])
-        with t1: 
-            st.caption(f"Score: {v_score}/6")
-            for x in v_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
-        with t2: 
-            st.caption(f"Score: {f_score}/6")
-            for x in f_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
-        with t3: 
-            st.caption(f"Score: {p_score}/6")
-            for x in p_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
-        with t4: 
-            st.caption(f"Score: {h_score}/6")
-            for x in h_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
-        with t5: 
-            st.caption(f"Score: {d_score}/6")
-            for x in d_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
+
+# Analysis Breakdown (Full Width Below)
+with st.expander("📊 See Analysis Breakdown", expanded=True):
+    t1, t2, t3, t4, t5 = st.tabs(["Valuation", "Future Growth", "Past Performance", "Financial Health", "Dividend"])
+    def print_list(items):
+        for x in items: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
+    with t1: st.markdown(f"**Score: {v_score}/6**"); print_list(v_details)
+    with t2: st.markdown(f"**Score: {f_score}/6**"); print_list(f_details)
+    with t3: st.markdown(f"**Score: {p_score}/6**"); print_list(p_details)
+    with t4: st.markdown(f"**Score: {h_score}/6**"); print_list(h_details)
+    with t5: st.markdown(f"**Score: {d_score}/6**"); print_list(d_details)
 
 st.divider()
 
@@ -495,58 +479,37 @@ def get_ret_fmt(days, fixed=None):
         else: p = perf_data['Close'].iloc[-days]
         ret = ((curr_c - p)/p)*100
         sign = "+" if ret >=0 else ""
-        return f"{sign}{ret:.1f}%"
-    except: return "-"
+        return f"({sign}{ret:.1f}%)"
+    except: return ""
 
-# Helper for HTML Coloring
+# Labels for Buttons
+# Note: Buttons are STATIC to prevent reset, data is in strip below
+tf_keys = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "Max"]
+if 'tf_sel' not in st.session_state: st.session_state.tf_sel = '1D'
+def update_tf(): pass
+
+# Render Buttons Below the Placeholder spot
+timeframe = st.radio("TF", tf_keys, horizontal=True, label_visibility="collapsed", key="tf_sel", on_change=update_tf)
+
+# Performance Strip (Dynamic Data)
+ytd_d = datetime(datetime.now().year, 1, 1)
+ret_1d = "(-)"
+if not perf_data.empty: ret_1d = get_ret_fmt(2)
+
 def get_color(val_str):
     if "+" in val_str: return "pos"
     if "-" in val_str: return "neg"
     return ""
 
-ytd_d = datetime(datetime.now().year, 1, 1)
-
-# Calculate Raw Strings
-v_1d = get_ret_fmt(2)
-v_5d = get_ret_fmt(6)
-v_1m = get_ret_fmt(22)
-v_6m = get_ret_fmt(126)
-v_ytd = get_ret_fmt(0, ytd_d)
-v_1y = get_ret_fmt(252)
-v_5y = get_ret_fmt(1260)
-v_max = get_ret_fmt(len(perf_data)-1)
-
-# 2. STATIC BUTTONS
-tf_keys = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "Max"]
-if 'tf_sel' not in st.session_state: st.session_state.tf_sel = '1D'
-def update_tf(): pass
-
-timeframe = st.radio("TF", tf_keys, horizontal=True, label_visibility="collapsed", key="tf_sel", on_change=update_tf)
-
-# 3. PERFORMANCE GRID BELOW BUTTONS
-st.markdown(f"""
-<div class="perf-container">
-    <div class="perf-item"><span class="perf-label">1 Day</span><span class="perf-val {get_color(v_1d)}">{v_1d}</span></div>
-    <div class="perf-item"><span class="perf-label">5 Days</span><span class="perf-val {get_color(v_5d)}">{v_5d}</span></div>
-    <div class="perf-item"><span class="perf-label">1 Month</span><span class="perf-val {get_color(v_1m)}">{v_1m}</span></div>
-    <div class="perf-item"><span class="perf-label">6 Months</span><span class="perf-val {get_color(v_6m)}">{v_6m}</span></div>
-    <div class="perf-item"><span class="perf-label">YTD</span><span class="perf-val {get_color(v_ytd)}">{v_ytd}</span></div>
-    <div class="perf-item"><span class="perf-label">1 Year</span><span class="perf-val {get_color(v_1y)}">{v_1y}</span></div>
-    <div class="perf-item"><span class="perf-label">5 Years</span><span class="perf-val {get_color(v_5y)}">{v_5y}</span></div>
-    <div class="perf-item"><span class="perf-label">All Time</span><span class="perf-val {get_color(v_max)}">{v_max}</span></div>
-</div>
-""", unsafe_allow_html=True)
-
-# 4. FETCH & RENDER CHART
-start_range = None; end_range = None; df = pd.DataFrame()
+# Logic
+df = pd.DataFrame()
+y_rng = None; x_rng = None
 
 if timeframe == '1D':
     df = stock.history(period='1d', interval='5m', prepost=True)
     if not df.empty:
         ldt = df.index[-1]
-        # Force fixed X-axis range 7:30 - 18:00
-        start_range = ldt.replace(hour=7, minute=30)
-        end_range = ldt.replace(hour=18, minute=0)
+        x_rng = [ldt.replace(hour=7, minute=30), ldt.replace(hour=18, minute=0)]
 elif timeframe == '5D': df = stock.history(period='5d', interval='15m', prepost=True)
 elif timeframe == '1M': df = stock.history(period='1mo', interval='1d')
 elif timeframe == '6M': df = stock.history(period='6mo', interval='1d')
@@ -561,10 +524,10 @@ if not df.empty:
     y_rng = [ymin - buff, ymax + buff]
     
     fig_p = go.Figure()
-    fig_p.add_trace(go.Scatter(x=df.index, y=df['Close'], mode='lines', line=dict(color='#36a2eb' if timeframe in ['1D','5D'] else '#00d09c', width=2), fill='tozeroy', fillcolor=f"rgba(0,208,156,0.1)" if timeframe not in ['1D','5D'] else "rgba(54,162,235,0.1)", hovertemplate='<b>%{x|%b %d %H:%M}</b><br>$%{y:.2f}<extra></extra>'))
+    fig_p.add_trace(go.Scatter(x=df.index, y=df['Close'], mode='lines', name='Close', line=dict(color='#36a2eb' if timeframe in ['1D','5D'] else '#00d09c', width=2), fill='tozeroy', fillcolor=f"rgba(0,208,156,0.1)" if timeframe not in ['1D','5D'] else "rgba(54,162,235,0.1)", hovertemplate='<b>%{x|%b %d %H:%M}</b><br>$%{y:.2f}<extra></extra>'))
     
     xa = dict(showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='solid', spikecolor="white", spikethickness=1, gridcolor='#36404e')
-    if timeframe == '1D' and start_range and end_range: xa['range'] = [start_range, end_range]
+    if timeframe == '1D' and x_rng: xa['range'] = x_rng
     
     fig_p.update_xaxes(**xa)
     fig_p.update_yaxes(range=y_rng, showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='dash', spikecolor="white", spikethickness=1, gridcolor='#36404e')
@@ -572,7 +535,30 @@ if not df.empty:
     
     chart_placeholder.plotly_chart(fig_p, use_container_width=True)
 else:
-    chart_placeholder.write("Data Unavailable")
+    chart_placeholder.write("Price data unavailable for this timeframe.")
+
+# Performance Strip Below Buttons
+v_1d = ret_1d
+v_5d = get_ret_fmt(6)
+v_1m = get_ret_fmt(22)
+v_6m = get_ret_fmt(126)
+v_ytd = get_ret_fmt(0, ytd_d)
+v_1y = get_ret_fmt(252)
+v_5y = get_ret_fmt(1260)
+v_max = get_ret_fmt(len(perf_data)-1)
+
+st.markdown(f"""
+<div class="perf-container">
+    <div class="perf-item"><span class="perf-label">1 Day</span><span class="perf-val {get_color(v_1d)}">{v_1d}</span></div>
+    <div class="perf-item"><span class="perf-label">5 Days</span><span class="perf-val {get_color(v_5d)}">{v_5d}</span></div>
+    <div class="perf-item"><span class="perf-label">1 Month</span><span class="perf-val {get_color(v_1m)}">{v_1m}</span></div>
+    <div class="perf-item"><span class="perf-label">6 Months</span><span class="perf-val {get_color(v_6m)}">{v_6m}</span></div>
+    <div class="perf-item"><span class="perf-label">YTD</span><span class="perf-val {get_color(v_ytd)}">{v_ytd}</span></div>
+    <div class="perf-item"><span class="perf-label">1 Year</span><span class="perf-val {get_color(v_1y)}">{v_1y}</span></div>
+    <div class="perf-item"><span class="perf-label">5 Years</span><span class="perf-val {get_color(v_5y)}">{v_5y}</span></div>
+    <div class="perf-item"><span class="perf-label">All Time</span><span class="perf-val {get_color(v_max)}">{v_max}</span></div>
+</div>
+""", unsafe_allow_html=True)
 
 st.divider()
 
