@@ -218,20 +218,17 @@ else:
     dy = info.get('dividendYield', 0) or 0
 
 roe = info.get('returnOnEquity', 0) or 0
-peg = info.get('pegRatio', 0) or 0
 de = info.get('debtToEquity', 0) or 0
 pe = info.get('trailingPE', 0) or 0
 beta = info.get('beta', 1.0) or 1.0
 
-# FIX: Calculate PEG manually if missing or 0
+# FIX: Calculate PEG manually if missing or 0 (Prioritize Forward EPS Growth)
 peg = info.get('pegRatio', 0)
 if (peg is None or peg == 0) and pe > 0:
-    # Try Forward/Trailing Growth
-    g_est = info.get('earningsGrowth', 0)
-    if g_est > 0:
-        peg = pe / (g_est * 100)
-    else:
-        peg = 0
+    f_eps = info.get('forwardEps', 0); t_eps = info.get('trailingEps', 0)
+    if f_eps > t_eps > 0: peg = pe / (((f_eps - t_eps) / t_eps) * 100)
+    elif info.get('earningsGrowth', 0) > 0: peg = pe / (info.get('earningsGrowth', 0) * 100)
+    else: peg = 0
 
 # --- RUN CALCULATIONS ---
 graham_fv = calc_graham(info)
@@ -384,7 +381,7 @@ payout = info.get('payoutRatio', 0) or 0
 s, t = check(payout < 0.90 and dy > 0, f"Earnings Coverage (Payout {payout*100:.0f}%)"); d_score+=s; d_details.append(t)
 cf_cover = False
 try:
-    div_paid = abs(get_val(cash_flow, ['Cash Dividends Paid']))
+    div_paid = abs(get_val(cash_flow, ['Cash Dividends Paid', 'Common Stock Dividend Paid']))
     fcf = get_val(cash_flow, ['Free Cash Flow'])
     if div_paid < fcf and dy > 0: cf_cover = True
     s, t = check(cf_cover, "Cash Flow Coverage"); d_score+=s; d_details.append(t)
@@ -403,19 +400,17 @@ fill_rgba = f"rgba{hex_to_rgba(flake_color, 0.4)}"
 st.markdown(f"### {info.get('shortName', ticker)} ({ticker})")
 st.write(info.get('longBusinessSummary', '')[:350] + "...")
 
-col1, col2 = st.columns([2, 1])
+# --- METRICS ROW (GAUGES + NUMBERS) ---
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Price", f"${current_price:.2f}")
+m2.metric("Market Cap", f"${(info.get('marketCap',0)/1e9):.1f}B")
+m3.metric("Beta", f"{info.get('beta', 0):.2f}")
+m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
 
-with col1:
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Price", f"${current_price:.2f}")
-    m2.metric("Market Cap", f"${(info.get('marketCap',0)/1e9):.1f}B")
-    m3.metric("Beta", f"{info.get('beta', 0):.2f}")
-    m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
-
-    g1, g2, g3 = st.columns(3)
-    g1.plotly_chart(create_gauge(beta, 0, 3, "Beta", suffix="x"), use_container_width=True)
-    g2.plotly_chart(create_gauge(info.get('marketCap',0)/1e9, 0, 3000, "Market Cap ($B)", color="#36a2eb"), use_container_width=True)
-    g3.plotly_chart(create_gauge(current_price, 0, current_price*1.5, "Price ($)"), use_container_width=True)
+g1, g2, g3 = st.columns(3)
+g1.plotly_chart(create_gauge(beta, 0, 3, "Beta", suffix="x"), use_container_width=True)
+g2.plotly_chart(create_gauge(info.get('marketCap',0)/1e9, 0, 3000, "Market Cap ($B)", color="#36a2eb"), use_container_width=True)
+g3.plotly_chart(create_gauge(current_price, 0, current_price*1.5, "Price ($)"), use_container_width=True)
 
 st.divider()
 
