@@ -10,6 +10,13 @@ from urllib.parse import urlparse
 # --- PAGE CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="MarketRadar", page_icon="📡")
 
+# --- SESSION STATE INITIALIZATION (Must be at top) ---
+if 'val_method' not in st.session_state:
+    st.session_state.val_method = "Discounted Cash Flow (DCF)"
+
+if 'tf_sel' not in st.session_state:
+    st.session_state.tf_sel = '1D'
+
 # --- CUSTOM CSS ---
 st.markdown("""
     <style>
@@ -95,38 +102,33 @@ def search_symbol(query):
     except:
         return []
 
+# --- TOP SEARCH BAR ---
+col_search1, col_search2 = st.columns([1, 3])
+with col_search1:
+    exchange = st.selectbox("Region", ["All / US", "Canada (TSX) .TO", "Canada (Venture) .V", "UK (London) .L", "Australia .AX", "India .NS"])
+with col_search2:
+    search_query = st.text_input("🔎 Search Stock (Company Name or Ticker)", placeholder="e.g. Apple, Shopify, RY.TO...")
+
+# Handle Search Logic
+if search_query:
+    search_results = search_symbol(search_query)
+    if "Canada (TSX)" in exchange: search_results = [x for x in search_results if ".TO" in x[1]]
+    elif "Venture" in exchange: search_results = [x for x in search_results if ".V" in x[1]]
+        
+    if search_results:
+        selected_option = st.selectbox("Select Match:", options=[x[0] for x in search_results], key="search_select")
+        if st.button("Analyze Stock"):
+            st.query_params["ticker"] = selected_option.split(" - ")[0]
+            st.rerun()
+    else:
+        st.warning("No matching stocks found.")
+
 # --- URL & STATE MANAGEMENT ---
 if "ticker" not in st.query_params:
     st.query_params["ticker"] = "AAPL"
 
 current_ticker = st.query_params["ticker"]
-
-# --- SIDEBAR ---
-with st.sidebar:
-    st.title("📡 MarketRadar")
-    
-    st.markdown("### 🔎 Symbol Lookup")
-    exchange = st.selectbox("Market / Region", ["All / US", "Canada (TSX) .TO", "Canada (Venture) .V", "UK (London) .L", "Australia .AX", "India .NS"])
-    search_query = st.text_input("Search Company or Ticker", placeholder="e.g. Shopify, Apple...")
-    
-    if search_query:
-        search_results = search_symbol(search_query)
-        if "Canada (TSX)" in exchange: search_results = [x for x in search_results if ".TO" in x[1]]
-        elif "Venture" in exchange: search_results = [x for x in search_results if ".V" in x[1]]
-            
-        if search_results:
-            selected_option = st.selectbox("Select Stock:", options=[x[0] for x in search_results], key="search_select")
-            if st.button("Go"):
-                st.query_params["ticker"] = selected_option.split(" - ")[0]
-                st.rerun()
-        else:
-            st.caption("No matching stocks found.")
-
-    st.divider()
-    st.markdown("### ⚙️ Settings")
-    val_method = st.radio("Fair Value Method", ["Discounted Cash Flow (DCF)", "Graham Formula", "Analyst Target"])
-
-ticker = st.query_params["ticker"]
+ticker = current_ticker # Ensure variable is set
 
 # --- FETCH DATA ---
 news_list = [] 
@@ -296,9 +298,9 @@ else: g_rate = info.get('earningsGrowth', 0) or 0
 rev_g = info.get('revenueGrowth', 0) or 0
 s, t = check(g_rate > 0.02, f"Earnings Growth ({g_rate*100:.1f}%) > Savings Rate (2%)"); f_score+=s; f_details.append(t)
 s, t = check(g_rate > 0.10, f"Earnings Growth ({g_rate*100:.1f}%) > Market Avg (10%)"); f_score+=s; f_details.append(t)
-s, t = check(g_rate > 0.20, f"High Growth Earnings ({g_rate*100:.1f}%) > 20%"); f_score+=s; f_details.append(t)
+s, t = check(g_rate > 0.20, f"High Growth Earnings > 20%"); f_score+=s; f_details.append(t)
 s, t = check(rev_g > 0.10, f"Revenue Growth ({rev_g*100:.1f}%) > Market Avg (10%)"); f_score+=s; f_details.append(t)
-s, t = check(rev_g > 0.20, f"High Growth Revenue ({rev_g*100:.1f}%) > 20%"); f_score+=s; f_details.append(t)
+s, t = check(rev_g > 0.20, f"High Growth Revenue > 20%"); f_score+=s; f_details.append(t)
 s, t = check(roe > 0.20, f"High Future ROE ({roe*100:.1f}%) > 20%"); f_score+=s; f_details.append(t)
 
 # 3. PAST PERFORMANCE
@@ -436,9 +438,21 @@ with col2:
     # --- SNOWFLAKE ---
     r_vals = final_scores + [final_scores[0]]
     theta_vals = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
-    fig = go.Figure(data=go.Scatterpolar(r=r_vals, theta=theta_vals, fill='toself', line_shape='spline', line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', text=[f"{s}/6" for s in r_vals], marker=dict(size=5)))
-    fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 6], tickvals=[1, 2, 3, 4, 5, 6], showticklabels=False, gridcolor='#444', gridwidth=1.5, layer='below traces'), angularaxis=dict(direction='clockwise', rotation=90, gridcolor='rgba(0,0,0,0)', tickfont=dict(color='white', size=12)), bgcolor='#232b36'), paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=40, b=20, l=40, r=40), showlegend=False, height=400)
+    fig = go.Figure(data=go.Scatterpolar(
+        r=r_vals, theta=theta_vals, fill='toself', line_shape='spline', 
+        line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', 
+        text=[f"{s}/6" for s in r_vals], marker=dict(size=5)
+    ))
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(visible=True, range=[0, 6], tickvals=[1, 2, 3, 4, 5, 6], showticklabels=False, gridcolor='#444', gridwidth=1.5, layer='below traces'),
+            angularaxis=dict(direction='clockwise', rotation=90, gridcolor='rgba(0,0,0,0)', tickfont=dict(color='white', size=12)),
+            bgcolor='#232b36'
+        ),
+        paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=40, b=20, l=40, r=40), showlegend=False, height=320
+    )
     st.plotly_chart(fig, use_container_width=True)
+    
     with st.expander("📊 Breakdown"):
         t1, t2, t3, t4, t5 = st.tabs(["Val", "Fut", "Pst", "Hlt", "Div"])
         with t1: 
@@ -504,21 +518,25 @@ def format_func(option): return tf_labels.get(option, option)
 
 # Buttons (Static Keys)
 tf_keys = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "Max"]
-if 'tf_sel' not in st.session_state: st.session_state.tf_sel = '1D'
 def update_tf(): pass
 
 # Render Buttons Below the Placeholder spot
-timeframe = st.radio("TF", tf_keys, horizontal=True, label_visibility="collapsed", key="tf_sel", on_change=update_tf)
+timeframe = st.radio("TF", tf_keys, format_func=format_func, horizontal=True, label_visibility="collapsed", key="tf_sel", on_change=update_tf)
 
 # Performance Strip (Dynamic Data)
-ytd_d = datetime(datetime.now().year, 1, 1)
-ret_1d = "(-)"
-if not perf_data.empty: ret_1d = get_ret_fmt(2)
-
 def get_color(val_str):
     if "+" in val_str: return "pos"
     if "-" in val_str: return "neg"
     return ""
+
+v_1d = ret_1d
+v_5d = get_ret_fmt(6)
+v_1m = get_ret_fmt(22)
+v_6m = get_ret_fmt(126)
+v_ytd = get_ret_fmt(0, ytd_d)
+v_1y = get_ret_fmt(252)
+v_5y = get_ret_fmt(1260)
+v_max = get_ret_fmt(len(perf_data)-1)
 
 # Logic
 df = pd.DataFrame()
@@ -557,15 +575,6 @@ else:
     chart_placeholder.write("Price data unavailable for this timeframe.")
 
 # Performance Strip Below Buttons
-v_1d = ret_1d
-v_5d = get_ret_fmt(6)
-v_1m = get_ret_fmt(22)
-v_6m = get_ret_fmt(126)
-v_ytd = get_ret_fmt(0, ytd_d)
-v_1y = get_ret_fmt(252)
-v_5y = get_ret_fmt(1260)
-v_max = get_ret_fmt(len(perf_data)-1)
-
 st.markdown(f"""
 <div class="perf-container">
     <div class="perf-item"><span class="perf-label">1 Day</span><span class="perf-val {get_color(v_1d)}">{v_1d}</span></div>
