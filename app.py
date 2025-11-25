@@ -218,22 +218,18 @@ else:
     dy = info.get('dividendYield', 0) or 0
 
 roe = info.get('returnOnEquity', 0) or 0
+peg = info.get('pegRatio', 0) or 0
 de = info.get('debtToEquity', 0) or 0
 pe = info.get('trailingPE', 0) or 0
 beta = info.get('beta', 1.0) or 1.0
 
-# --- PEG RATIO FIX ---
+# FIX: Calculate PEG manually if missing or 0
 peg = info.get('pegRatio', 0)
 if (peg is None or peg == 0) and pe > 0:
-    # Use Forward Estimates for a more accurate PEG (Avoids 90% Trailing Growth glitch)
-    f_eps = info.get('forwardEps', 0)
-    t_eps = info.get('trailingEps', 0)
-    if f_eps and t_eps and t_eps > 0:
-        g_forward = (f_eps - t_eps) / t_eps
-        if g_forward > 0:
-            peg = pe / (g_forward * 100)
-        else:
-            peg = 0 # Growth is negative
+    # Try Forward/Trailing Growth
+    g_est = info.get('earningsGrowth', 0)
+    if g_est > 0:
+        peg = pe / (g_est * 100)
     else:
         peg = 0
 
@@ -279,14 +275,9 @@ f_score = 0
 f_details = []
 f_eps = info.get('forwardEps', 0) or 0
 t_eps = info.get('trailingEps', 0) or 0
-# Use PEG-Implied growth or Forward EPS growth to match SWS better than trailing
-if peg > 0 and pe > 0:
-    g_rate = (pe / peg) / 100
-elif f_eps > 0 and t_eps > 0:
-    g_rate = (f_eps - t_eps) / t_eps
-else:
-    g_rate = info.get('earningsGrowth', 0) or 0
-
+if peg > 0 and pe > 0: g_rate = (pe / peg) / 100
+elif f_eps > 0 and t_eps > 0: g_rate = (f_eps - t_eps) / t_eps
+else: g_rate = info.get('earningsGrowth', 0) or 0
 rev_g = info.get('revenueGrowth', 0) or 0
 s, t = check(g_rate > 0.02, f"Earnings Growth ({g_rate*100:.1f}%) > Savings Rate (2%)"); f_score+=s; f_details.append(t)
 s, t = check(g_rate > 0.10, f"Earnings Growth ({g_rate*100:.1f}%) > Market Avg (10%)"); f_score+=s; f_details.append(t)
@@ -393,7 +384,7 @@ payout = info.get('payoutRatio', 0) or 0
 s, t = check(payout < 0.90 and dy > 0, f"Earnings Coverage (Payout {payout*100:.0f}%)"); d_score+=s; d_details.append(t)
 cf_cover = False
 try:
-    div_paid = abs(get_val(cash_flow, ['Cash Dividends Paid', 'Common Stock Dividend Paid']))
+    div_paid = abs(get_val(cash_flow, ['Cash Dividends Paid']))
     fcf = get_val(cash_flow, ['Free Cash Flow'])
     if div_paid < fcf and dy > 0: cf_cover = True
     s, t = check(cf_cover, "Cash Flow Coverage"); d_score+=s; d_details.append(t)
@@ -426,30 +417,31 @@ with col1:
     g2.plotly_chart(create_gauge(info.get('marketCap',0)/1e9, 0, 3000, "Market Cap ($B)", color="#36a2eb"), use_container_width=True)
     g3.plotly_chart(create_gauge(current_price, 0, current_price*1.5, "Price ($)"), use_container_width=True)
 
-with col2:
-    # --- SNOWFLAKE ---
+st.divider()
+
+# --- SNOWFLAKE & ANALYSIS BREAKDOWN ---
+st.header("Fundamental Analysis")
+
+# Centered Snowflake with Columns
+c_left, c_center, c_right = st.columns([1, 2, 1])
+
+with c_center:
     r_vals = final_scores + [final_scores[0]]
     theta_vals = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
     fig = go.Figure(data=go.Scatterpolar(r=r_vals, theta=theta_vals, fill='toself', line_shape='spline', line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', text=[f"{s}/6" for s in r_vals], marker=dict(size=5)))
     fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 6], tickvals=[1, 2, 3, 4, 5, 6], showticklabels=False, gridcolor='#444', gridwidth=1.5, layer='below traces'), angularaxis=dict(direction='clockwise', rotation=90, gridcolor='rgba(0,0,0,0)', tickfont=dict(color='white', size=12)), bgcolor='#232b36'), paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=40, b=20, l=40, r=40), showlegend=False, height=400)
     st.plotly_chart(fig, use_container_width=True)
-    with st.expander("📊 Breakdown"):
-        t1, t2, t3, t4, t5 = st.tabs(["Val", "Fut", "Pst", "Hlt", "Div"])
-        with t1: 
-            st.caption(f"Score: {v_score}/6")
-            for x in v_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
-        with t2: 
-            st.caption(f"Score: {f_score}/6")
-            for x in f_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
-        with t3: 
-            st.caption(f"Score: {p_score}/6")
-            for x in p_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
-        with t4: 
-            st.caption(f"Score: {h_score}/6")
-            for x in h_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
-        with t5: 
-            st.caption(f"Score: {d_score}/6")
-            for x in d_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
+
+# Analysis Breakdown (Full Width Below)
+with st.expander("📊 See Analysis Breakdown", expanded=True):
+    t1, t2, t3, t4, t5 = st.tabs(["Valuation", "Future Growth", "Past Performance", "Financial Health", "Dividend"])
+    def print_list(items):
+        for x in items: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
+    with t1: st.markdown(f"**Score: {v_score}/6**"); print_list(v_details)
+    with t2: st.markdown(f"**Score: {f_score}/6**"); print_list(f_details)
+    with t3: st.markdown(f"**Score: {p_score}/6**"); print_list(p_details)
+    with t4: st.markdown(f"**Score: {h_score}/6**"); print_list(h_details)
+    with t5: st.markdown(f"**Score: {d_score}/6**"); print_list(d_details)
 
 st.divider()
 
@@ -480,29 +472,13 @@ def get_ret_fmt(days, fixed=None):
     except: return ""
 
 # Labels for Buttons
-tf_labels = {}
-ytd_d = datetime(datetime.now().year, 1, 1)
-ret_1d = "(-)"
-if not perf_data.empty: ret_1d = get_ret_fmt(2)
-
-tf_labels["1D"] = f"1D {ret_1d}"
-tf_labels["5D"] = f"5D {get_ret_fmt(6)}"
-tf_labels["1M"] = f"1M {get_ret_fmt(22)}"
-tf_labels["6M"] = f"6M {get_ret_fmt(126)}"
-tf_labels["YTD"] = f"YTD {get_ret_fmt(0, ytd_d)}"
-tf_labels["1Y"] = f"1Y {get_ret_fmt(252)}"
-tf_labels["5Y"] = f"5Y {get_ret_fmt(1260)}"
-tf_labels["Max"] = f"Max {get_ret_fmt(len(perf_data)-1)}"
-
-def format_func(option): return tf_labels.get(option, option)
-
-# Buttons (Static Keys)
+# Note: Buttons are STATIC to prevent reset, data is in strip below
 tf_keys = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "Max"]
 if 'tf_sel' not in st.session_state: st.session_state.tf_sel = '1D'
 def update_tf(): pass
 
 # Render Buttons Below the Placeholder spot
-timeframe = st.radio("TF", tf_keys, format_func=format_func, horizontal=True, label_visibility="collapsed", key="tf_sel", on_change=update_tf)
+timeframe = st.radio("TF", tf_keys, horizontal=True, label_visibility="collapsed", key="tf_sel", on_change=update_tf)
 
 # Performance Strip (Dynamic Data)
 ytd_d = datetime(datetime.now().year, 1, 1)
@@ -604,6 +580,7 @@ st.divider()
 st.header("2. Future Growth")
 f1, f2 = st.columns(2)
 with f1:
+    # --- REPLACED LINES 577-596 WITH THIS ---
     fig_f = go.Figure(data=[
         go.Bar(name='Company', x=['Growth'], y=[g_rate*100], marker_color='#36a2eb', text=[f"{g_rate*100:.1f}%"], textposition='auto'),
         go.Bar(name='Market', x=['Growth'], y=[10.0], marker_color='#ff6384', text=["10.0%"], textposition='auto'),
@@ -612,7 +589,9 @@ with f1:
     fig_f.update_layout(barmode='group', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), title="Annual Forecast", height=250, showlegend=True, margin=dict(t=30, b=10, l=10, r=10))
     st.plotly_chart(fig_f, use_container_width=True)
 with f2:
+    # Replaced Bullet with Gauge per request "choose a better graph"
     st.plotly_chart(create_gauge(roe*100, 0, max(30, roe*100), "Future Return on Equity (ROE)", suffix="%"), use_container_width=True)
+    # --- END REPLACEMENT ---
 
 st.divider()
 
@@ -663,15 +642,7 @@ with d2:
     payout = info.get('payoutRatio', 0) or 0
     if payout > 0:
         fig_pay = go.Figure(data=[go.Pie(labels=['Payout', 'Retained'], values=[payout, 1-payout], hole=.7, marker=dict(colors=['#36a2eb', '#232b36']), textinfo='none', hoverinfo='label+percent')])
-        fig_pay.update_layout(
-            showlegend=False, 
-            height=170, 
-            margin=dict(t=50, b=10, l=20, r=20), 
-            paper_bgcolor='rgba(0,0,0,0)', 
-            font=dict(color='white'), 
-            title={'text': "Payout Ratio", 'y':0.95, 'x':0.5, 'xanchor': 'center', 'yanchor': 'top', 'font': {'size': 14, 'color': '#8c97a7'}}, 
-            annotations=[dict(text=f"<span style='font-size:20px; font-weight:bold'>{payout*100:.0f}%</span>", x=0.5, y=0.5, showarrow=False)]
-        )
+        fig_pay.update_layout(showlegend=False, height=170, margin=dict(t=50, b=10, l=20, r=20), paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), title={'text': "Payout Ratio", 'x': 0.5, 'y': 0.85, 'xanchor': 'center', 'font': {'size': 14, 'color': '#8c97a7'}}, annotations=[dict(text=f"<span style='font-size:20px; font-weight:bold'>{payout*100:.0f}%</span>", x=0.5, y=0.5, showarrow=False)])
         st.plotly_chart(fig_pay, use_container_width=True)
     else: st.write("No Dividend Payout")
 
