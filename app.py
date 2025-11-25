@@ -24,55 +24,31 @@ st.markdown("""
     .news-meta { color: #8c97a7; font-size: 0.85em; }
     div[data-baseweb="select"] > div { background-color: #2c3542; color: white; border-color: #444; }
     
-    /* Timeframe Buttons - Centered and Styled */
-    div[data-testid="stRadio"] > div { 
-        display: flex; 
-        justify-content: center;
-        flex-wrap: wrap;
-        gap: 0px; 
-        width: 100%;
-        margin-bottom: 10px;
-    }
+    /* Timeframe Buttons */
+    div[data-testid="stRadio"] > div { display: flex; justify-content: center; gap: 5px; width: 100%; flex-wrap: wrap; }
     div[data-testid="stRadio"] label {
-        background-color: #232b36;
-        padding: 6px 16px;
-        border-radius: 4px;
-        border: 1px solid #36404e;
-        cursor: pointer;
-        flex-grow: 1;
-        text-align: center;
-        font-size: 0.9rem;
-        margin: 0 2px;
-        transition: all 0.2s;
+        background-color: #232b36; padding: 5px 10px; border-radius: 5px; border: 1px solid #36404e;
+        cursor: pointer; flex-grow: 1; text-align: center; font-size: 0.9rem;
     }
     div[data-testid="stRadio"] label:hover { border-color: #00d09c; color: #00d09c; }
     
-    /* Performance Grid Styles */
     .perf-container {
-        display: grid;
-        grid-template-columns: repeat(8, 1fr);
-        gap: 5px;
-        margin-top: 5px;
-        margin-bottom: 20px;
-        padding: 10px;
-        border-radius: 10px;
-        text-align: center;
-        background-color: #181e26;
-        border: 1px solid #36404e;
+        display: grid; grid-template-columns: repeat(8, 1fr); gap: 10px;
+        margin-top: 10px; margin-bottom: 20px; background-color: #232b36;
+        padding: 15px; border-radius: 10px; text-align: center;
     }
     .perf-item { display: flex; flex-direction: column; }
-    .perf-label { color: #8c97a7; font-size: 0.75rem; margin-bottom: 2px; }
-    .perf-val { font-weight: bold; font-size: 0.95rem; }
+    .perf-label { color: #8c97a7; font-size: 0.8rem; margin-bottom: 5px; }
+    .perf-val { font-weight: bold; font-size: 1rem; }
     .pos { color: #00d09c; }
     .neg { color: #ff6384; }
     
-    /* Checklist Styles */
     .check-item { margin-bottom: 8px; font-size: 0.9rem; }
     .check-pass { color: #00d09c; margin-right: 8px; }
     .check-fail { color: #ff6384; margin-right: 8px; }
     
     @media (max-width: 800px) {
-        .perf-container { grid-template-columns: repeat(4, 1fr); gap: 10px; }
+        .perf-container { grid-template-columns: repeat(4, 1fr); gap: 15px; }
     }
     </style>
 """, unsafe_allow_html=True)
@@ -398,7 +374,7 @@ payout = info.get('payoutRatio', 0) or 0
 s, t = check(payout < 0.90 and dy > 0, f"Earnings Coverage (Payout {payout*100:.0f}%)"); d_score+=s; d_details.append(t)
 cf_cover = False
 try:
-    div_paid = abs(get_val(cash_flow, ['Cash Dividends Paid']))
+    div_paid = abs(get_val(cash_flow, ['Cash Dividends Paid', 'Common Stock Dividend Paid']))
     fcf = get_val(cash_flow, ['Free Cash Flow'])
     if div_paid < fcf and dy > 0: cf_cover = True
     s, t = check(cf_cover, "Cash Flow Coverage"); d_score+=s; d_details.append(t)
@@ -432,19 +408,17 @@ st.divider()
 
 # --- SNOWFLAKE & ANALYSIS BREAKDOWN ---
 st.header("Fundamental Analysis")
+col_snow, col_breakdown = st.columns([1, 2])
 
-# Centered Snowflake with Columns
-c_left, c_center, c_right = st.columns([1, 2, 1])
-
-with c_center:
-    r_vals = final_scores + [final_scores[0]]
-    theta_vals = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
-    fig = go.Figure(data=go.Scatterpolar(r=r_vals, theta=theta_vals, fill='toself', line_shape='spline', line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', text=[f"{s}/6" for s in r_vals], marker=dict(size=5)))
+with col_snow:
+    r_v = final_scores + [final_scores[0]]
+    theta_v = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
+    fig = go.Figure(data=go.Scatterpolar(r=r_v, theta=theta_v, fill='toself', line_shape='spline', line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', text=[f"{s}/6" for s in r_v], marker=dict(size=5)))
     fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 6], tickvals=[1, 2, 3, 4, 5, 6], showticklabels=False, gridcolor='#444', gridwidth=1.5, layer='below traces'), angularaxis=dict(direction='clockwise', rotation=90, gridcolor='rgba(0,0,0,0)', tickfont=dict(color='white', size=12)), bgcolor='#232b36'), paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=40, b=20, l=40, r=40), showlegend=False, height=400)
     st.plotly_chart(fig, use_container_width=True)
 
-# Analysis Breakdown (Full Width Below)
-with st.expander("📊 See Analysis Breakdown", expanded=True):
+with col_breakdown:
+    st.subheader("Analysis Breakdown")
     t1, t2, t3, t4, t5 = st.tabs(["Valuation", "Future Growth", "Past Performance", "Financial Health", "Dividend"])
     def print_list(items):
         for x in items: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
@@ -483,13 +457,29 @@ def get_ret_fmt(days, fixed=None):
     except: return ""
 
 # Labels for Buttons
-# Note: Buttons are STATIC to prevent reset, data is in strip below
+tf_labels = {}
+ytd_d = datetime(datetime.now().year, 1, 1)
+ret_1d = "(-)"
+if not perf_data.empty: ret_1d = get_ret_fmt(2)
+
+tf_labels["1D"] = f"1D {ret_1d}"
+tf_labels["5D"] = f"5D {get_ret_fmt(6)}"
+tf_labels["1M"] = f"1M {get_ret_fmt(22)}"
+tf_labels["6M"] = f"6M {get_ret_fmt(126)}"
+tf_labels["YTD"] = f"YTD {get_ret_fmt(0, ytd_d)}"
+tf_labels["1Y"] = f"1Y {get_ret_fmt(252)}"
+tf_labels["5Y"] = f"5Y {get_ret_fmt(1260)}"
+tf_labels["Max"] = f"Max {get_ret_fmt(len(perf_data)-1)}"
+
+def format_func(option): return tf_labels.get(option, option)
+
+# Buttons (Static Keys)
 tf_keys = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "Max"]
 if 'tf_sel' not in st.session_state: st.session_state.tf_sel = '1D'
 def update_tf(): pass
 
 # Render Buttons Below the Placeholder spot
-timeframe = st.radio("TF", tf_keys, horizontal=True, label_visibility="collapsed", key="tf_sel", on_change=update_tf)
+timeframe = st.radio("TF", tf_keys, format_func=format_func, horizontal=True, label_visibility="collapsed", key="tf_sel", on_change=update_tf)
 
 # Performance Strip (Dynamic Data)
 ytd_d = datetime(datetime.now().year, 1, 1)
@@ -650,12 +640,19 @@ st.divider()
 st.header("5. Dividend")
 d1, d2 = st.columns(2)
 with d1:
-    st.plotly_chart(create_gauge(dy*100, 0, max(6, dy*100), "Dividend Yield", suffix="%"), use_container_width=True)
+    # Larger Gauge
+    fig_d = go.Figure(go.Indicator(
+        mode = "gauge+number", value = dy * 100, title = {'text': "Dividend Yield"},
+        gauge = {'axis': {'range': [0, max(6, dy*100)]}, 'bar': {'color': "#00d09c"}, 'steps': [{'range': [0, 1.5], 'color': "#ff6384"}], 'threshold': {'line': {'color': "white", 'width': 4}, 'thickness': 0.75, 'value': 1.5}}
+    ))
+    fig_d.update_layout(paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), height=320, margin=dict(t=50, b=10, l=10, r=10))
+    st.plotly_chart(fig_d, use_container_width=True)
 with d2:
+    # Larger Pie
     payout = info.get('payoutRatio', 0) or 0
     if payout > 0:
         fig_pay = go.Figure(data=[go.Pie(labels=['Payout', 'Retained'], values=[payout, 1-payout], hole=.7, marker=dict(colors=['#36a2eb', '#232b36']))])
-        fig_pay.update_layout(showlegend=False, height=250, paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), annotations=[dict(text=f"{payout*100:.0f}%", x=0.5, y=0.5, font_size=20, showarrow=False)])
+        fig_pay.update_layout(showlegend=False, height=320, margin=dict(t=0, b=0, l=0, r=0), paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white', size=20), annotations=[dict(text=f"{payout*100:.0f}%", x=0.5, y=0.5, font_size=30, showarrow=False)])
         st.plotly_chart(fig_pay, use_container_width=True)
     else: st.write("No Dividend Payout")
 
