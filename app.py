@@ -53,6 +53,68 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# --- HELPER FUNCTIONS ---
+def get_val(df, keys_list):
+    for k in keys_list:
+        if k in df.columns:
+            val = df[k].iloc[0]
+            if pd.notna(val): return val
+    return 0
+
+def get_debt(df):
+    d = get_val(df, ['Total Debt', 'Total Financial Debt'])
+    if d == 0:
+        long_term = get_val(df, ['Long Term Debt', 'Long Term Debt And Capital Lease Obligation'])
+        short_term = get_val(df, ['Current Debt', 'Current Debt And Capital Lease Obligation', 'Commercial Paper'])
+        d = long_term + short_term
+    return d
+
+def fmt_num(num):
+    if num is None or num == 0: return "N/A"
+    if abs(num) >= 1e9: return f"${num/1e9:.1f}B"
+    if abs(num) >= 1e6: return f"${num/1e6:.1f}M"
+    return f"${num:.2f}"
+
+def create_gauge(val, min_v, max_v, title, color="#00d09c", suffix=""):
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number", value=val, title={'text': title, 'font': {'size': 14, 'color': '#8c97a7'}},
+        number={'suffix': suffix, 'font': {'size': 20}},
+        gauge={'axis': {'range': [min_v, max_v]}, 'bar': {'color': color}, 
+               'bgcolor': "#2c3542", 'borderwidth': 0}
+    ))
+    # Increased top margin (t=50) to prevent labels from being cut off
+    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), height=170, margin=dict(t=50, b=10, l=20, r=20))
+    return fig
+
+def get_news_data(article):
+    title = article.get('title')
+    if not title and 'content' in article: title = article['content'].get('title')
+    if not title: title = article.get('headline', 'No Title Available')
+    
+    link = article.get('link')
+    if isinstance(link, dict): link = link.get('url')
+    if not link and 'content' in article:
+        link = article['content'].get('link') or article['content'].get('canonicalUrl')
+        if isinstance(link, dict): link = link.get('url')
+    if not link: link = article.get('clickThroughUrl', 'https://finance.yahoo.com')
+    
+    publisher = "Unknown"
+    if 'provider' in article:
+        provider = article['provider']
+        if isinstance(provider, dict): publisher = provider.get('displayName') or provider.get('title') or "Unknown"
+    elif 'publisher' in article:
+        pub = article['publisher']
+        if isinstance(pub, dict): publisher = pub.get('title') or pub.get('name') or "Unknown"
+        else: publisher = str(pub)
+    
+    if publisher == "Unknown" and link:
+        try:
+            domain = urlparse(link).netloc
+            clean_domain = domain.replace('www.', '').split('.')[0]
+            if clean_domain: publisher = clean_domain.capitalize()
+        except: pass
+    return title, link, publisher, article.get('providerPublishTime', 0)
+
 # --- SEARCH FUNCTION ---
 @st.cache_data(ttl=3600)
 def search_symbol(query):
@@ -125,57 +187,7 @@ except Exception as e:
     st.error(f"Error fetching data: {e}")
     st.stop()
 
-# --- HELPER FUNCTIONS ---
-def get_val(df, keys_list):
-    for k in keys_list:
-        if k in df.columns:
-            val = df[k].iloc[0]
-            if pd.notna(val): return val
-    return 0
-
-def get_debt(df):
-    d = get_val(df, ['Total Debt', 'Total Financial Debt'])
-    if d == 0:
-        long_term = get_val(df, ['Long Term Debt', 'Long Term Debt And Capital Lease Obligation'])
-        short_term = get_val(df, ['Current Debt', 'Current Debt And Capital Lease Obligation', 'Commercial Paper'])
-        d = long_term + short_term
-    return d
-
-def fmt_num(num):
-    if num is None or num == 0: return "N/A"
-    if abs(num) >= 1e9: return f"${num/1e9:.1f}B"
-    if abs(num) >= 1e6: return f"${num/1e6:.1f}M"
-    return f"${num:.2f}"
-
-def get_news_data(article):
-    title = article.get('title')
-    if not title and 'content' in article: title = article['content'].get('title')
-    if not title: title = article.get('headline', 'No Title Available')
-    
-    link = article.get('link')
-    if isinstance(link, dict): link = link.get('url')
-    if not link and 'content' in article:
-        link = article['content'].get('link') or article['content'].get('canonicalUrl')
-        if isinstance(link, dict): link = link.get('url')
-    if not link: link = article.get('clickThroughUrl', 'https://finance.yahoo.com')
-    
-    publisher = "Unknown"
-    if 'provider' in article:
-        provider = article['provider']
-        if isinstance(provider, dict): publisher = provider.get('displayName') or provider.get('title') or "Unknown"
-    elif 'publisher' in article:
-        pub = article['publisher']
-        if isinstance(pub, dict): publisher = pub.get('title') or pub.get('name') or "Unknown"
-        else: publisher = str(pub)
-    
-    if publisher == "Unknown" and link:
-        try:
-            domain = urlparse(link).netloc
-            clean_domain = domain.replace('www.', '').split('.')[0]
-            if clean_domain: publisher = clean_domain.capitalize()
-        except: pass
-    return title, link, publisher, article.get('providerPublishTime', 0)
-
+# --- CALCULATION FUNCTIONS ---
 def calc_graham(info):
     eps = info.get('trailingEps', 0)
     bv = info.get('bookValue', 0)
@@ -198,16 +210,6 @@ def calc_dcf(stock, info):
         dcf_val = (sum(future_cash_flows) + (term_val / ((1 + discount_rate) ** 5))) / info.get('sharesOutstanding', 1)
         return dcf_val, growth_rate
     except: return 0, 0
-
-def create_gauge(val, min_v, max_v, title, color="#00d09c", suffix=""):
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number", value=val, title={'text': title, 'font': {'size': 14, 'color': '#8c97a7'}},
-        number={'suffix': suffix, 'font': {'size': 20}},
-        gauge={'axis': {'range': [min_v, max_v]}, 'bar': {'color': color}, 
-               'bgcolor': "#2c3542", 'borderwidth': 0}
-    ))
-    fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), height=150, margin=dict(t=30, b=10, l=20, r=20))
-    return fig
 
 # --- VARIABLE EXTRACTION ---
 div_rate = info.get('dividendRate', 0)
@@ -269,11 +271,12 @@ if peg > 0 and pe > 0: g_rate = (pe / peg) / 100
 elif f_eps > 0 and t_eps > 0: g_rate = (f_eps - t_eps) / t_eps
 else: g_rate = info.get('earningsGrowth', 0) or 0
 rev_g = info.get('revenueGrowth', 0) or 0
+
 s, t = check(g_rate > 0.02, f"Earnings Growth ({g_rate*100:.1f}%) > Savings Rate (2%)"); f_score+=s; f_details.append(t)
 s, t = check(g_rate > 0.10, f"Earnings Growth ({g_rate*100:.1f}%) > Market Avg (10%)"); f_score+=s; f_details.append(t)
-s, t = check(g_rate > 0.20, f"High Growth Earnings > 20%"); f_score+=s; f_details.append(t)
+s, t = check(g_rate > 0.20, f"High Growth Earnings ({g_rate*100:.1f}%) > 20%"); f_score+=s; f_details.append(t)
 s, t = check(rev_g > 0.10, f"Revenue Growth ({rev_g*100:.1f}%) > Market Avg (10%)"); f_score+=s; f_details.append(t)
-s, t = check(rev_g > 0.20, f"High Growth Revenue > 20%"); f_score+=s; f_details.append(t)
+s, t = check(rev_g > 0.20, f"High Growth Revenue ({rev_g*100:.1f}%) > 20%"); f_score+=s; f_details.append(t)
 s, t = check(roe > 0.20, f"High Future ROE ({roe*100:.1f}%) > 20%"); f_score+=s; f_details.append(t)
 
 # 3. PAST PERFORMANCE
@@ -298,7 +301,7 @@ try:
             years = len(eps_series) - 1
             if years > 0 and oldest_eps > 0 and curr_eps > 0:
                 cagr = (curr_eps / oldest_eps) ** (1/years) - 1
-                s, t = check(eps_growth_1y > cagr, f"Accelerating Growth > {cagr*100:.1f}% Avg"); p_score+=s; p_details.append(t)
+                s, t = check(eps_growth_1y > cagr, f"Accelerating Growth ({eps_growth_1y*100:.1f}% > {cagr*100:.1f}% Avg)"); p_score+=s; p_details.append(t)
             else: p_details.append("❌ Accelerated Growth (Data Gap)")
             s, t = check(roe > 0.20, f"High ROE ({roe*100:.1f}% > 20%)"); p_score+=s; p_details.append(t)
             def get_roce(idx):
@@ -327,26 +330,28 @@ try:
     interest = abs(get_val(financials, ['Interest Expense', 'Interest Expense Non Operating', 'Total Interest Expenses']))
     ocf = get_val(cash_flow, ['Operating Cash Flow', 'Total Cash From Operating Activities', 'Cash Flow From Continuing Operating Activities'])
 
-    if curr_assets > 0 and curr_liab > 0: s, t = check(curr_assets > curr_liab, "Short Term Assets > Short Term Liab"); h_score+=s; h_details.append(t)
-    else: h_score+=0; h_details.append("❌ Short Term Check (Bank/N/A)")
-    
-    if curr_assets > 0: s, t = check(curr_assets > (total_liab - curr_liab), "Short Term Assets > Long Term Liab"); h_score+=s; h_details.append(t)
-    else: h_score+=0; h_details.append("❌ Long Term Check (Bank/N/A)")
+    if curr_assets > 0 and curr_liab > 0: s, t = check(curr_assets > curr_liab, f"Short Term Assets ({fmt_num(curr_assets)}) > Liab ({fmt_num(curr_liab)})")
+    else: s, t = 0, "❌ Short Term Assets/Liab (Data Unavailable/Bank)"
+    h_score+=s; h_details.append(t)
 
+    if curr_assets > 0: s, t = check(curr_assets > (total_liab - curr_liab), f"Short Term Assets > Long Term Liab ({fmt_num(total_liab - curr_liab)})")
+    else: s, t = 0, "❌ Long Term Coverage (Data Unavailable/Bank)"
+    h_score+=s; h_details.append(t)
+    
     de_ratio = total_debt / equity if equity != 0 else 999
     s, t = check((de_ratio < 0.40) or (cash_bs > total_debt), f"Safe Debt Level (D/E: {de_ratio*100:.0f}%)"); h_score+=s; h_details.append(t)
     
     if len(balance_sheet.columns) > 1:
         prev_df = pd.DataFrame(balance_sheet.iloc[:, 1])
         prev_de = get_debt(prev_df) / get_val(prev_df, ['Stockholders Equity', 'Total Stockholder Equity'])
-        s, t = check(de_ratio < prev_de, "Reducing Debt vs Last Year"); h_score+=s; h_details.append(t)
+        s, t = check(de_ratio < prev_de, f"Reducing Debt ({de_ratio*100:.0f}% < {prev_de*100:.0f}%)"); h_score+=s; h_details.append(t)
     else: h_details.append("❌ Reducing Debt (Data Gap)")
 
-    if total_debt > 0: s, t = check(ocf > (total_debt * 0.2), f"Debt Coverage (OCF > 20% Debt)")
+    if total_debt > 0: s, t = check(ocf > (total_debt * 0.2), f"Debt Coverage (OCF {fmt_num(ocf)} > 20% of Debt)")
     else: s, t = 1, "✅ Debt Coverage (No Debt)"
     h_score+=s; h_details.append(t)
 
-    if interest > 0: s, t = check(ebit > (interest * 5), f"Interest Coverage (EBIT > 5x Int)")
+    if interest > 0: s, t = check(ebit > (interest * 5), f"Interest Coverage (EBIT/Int: {(ebit/interest):.1f}x > 5x)")
     else: s, t = 1, "✅ Interest Coverage (No Int)"
     h_score+=s; h_details.append(t)
 except Exception as e: h_score=3; h_details.append(f"❌ Health Data Error: {str(e)}")
@@ -377,7 +382,7 @@ try:
     div_paid = abs(get_val(cash_flow, ['Cash Dividends Paid']))
     fcf = get_val(cash_flow, ['Free Cash Flow'])
     if div_paid < fcf and dy > 0: cf_cover = True
-    s, t = check(cf_cover, "Cash Flow Coverage"); d_score+=s; d_details.append(t)
+    s, t = check(cf_cover, f"Cash Flow Coverage (Div: {fmt_num(div_paid)} < FCF: {fmt_num(fcf)})"); d_score+=s; d_details.append(t)
 except: d_details.append("❌ Cash Flow Coverage (Data Gap)")
 
 final_scores = [v_score, f_score, p_score, h_score, d_score]
@@ -419,41 +424,28 @@ with col_snow:
 
 with col_breakdown:
     st.subheader("Analysis Breakdown")
-    # Using Tabs for clean look
     t1, t2, t3, t4, t5 = st.tabs(["Valuation", "Future Growth", "Past Performance", "Financial Health", "Dividend"])
-    
-    # Helper to print list
     def print_list(items):
         for x in items: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
-
-    with t1:
-        st.markdown(f"**Score: {v_score}/6**")
-        print_list(v_details)
-    with t2:
-        st.markdown(f"**Score: {f_score}/6**")
-        print_list(f_details)
-    with t3:
-        st.markdown(f"**Score: {p_score}/6**")
-        print_list(p_details)
-    with t4:
-        st.markdown(f"**Score: {h_score}/6**")
-        print_list(h_details)
-    with t5:
-        st.markdown(f"**Score: {d_score}/6**")
-        print_list(d_details)
+    with t1: st.markdown(f"**Score: {v_score}/6**"); print_list(v_details)
+    with t2: st.markdown(f"**Score: {f_score}/6**"); print_list(f_details)
+    with t3: st.markdown(f"**Score: {p_score}/6**"); print_list(p_details)
+    with t4: st.markdown(f"**Score: {h_score}/6**"); print_list(h_details)
+    with t5: st.markdown(f"**Score: {d_score}/6**"); print_list(d_details)
 
 st.divider()
 
-# --- PRICE HISTORY ---
+# --- PRICE HISTORY (Containerized) ---
 st.header("Price History")
 
-# Placeholder for Graph
+# Placeholder for the Graph
 chart_placeholder = st.empty()
 
-# Pre-fetch data for Performance Strip (Max History)
+# 1. PRE-FETCH MAX HISTORY FOR LABELS
 perf_data = stock.history(period="max", interval="1d")
 if not perf_data.empty:
-    if perf_data.index.tz is not None: perf_data.index = perf_data.index.tz_localize(None)
+    if perf_data.index.tz is not None:
+        perf_data.index = perf_data.index.tz_localize(None)
     curr_c = perf_data['Close'].iloc[-1]
 else:
     curr_c = 0
@@ -491,7 +483,7 @@ tf_keys = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "Max"]
 if 'tf_sel' not in st.session_state: st.session_state.tf_sel = '1D'
 def update_tf(): pass
 
-# Render Buttons Below the Placeholder spot (will be pushed up via layout flow, but conceptually separate)
+# Render Buttons Below the Placeholder spot
 timeframe = st.radio("TF", tf_keys, format_func=format_func, horizontal=True, label_visibility="collapsed", key="tf_sel", on_change=update_tf)
 
 # Logic
@@ -519,11 +511,11 @@ if not df.empty:
     fig_p = go.Figure()
     fig_p.add_trace(go.Scatter(x=df.index, y=df['Close'], mode='lines', line=dict(color='#36a2eb' if timeframe in ['1D','5D'] else '#00d09c', width=2), fill='tozeroy', fillcolor=f"rgba(0,208,156,0.1)" if timeframe not in ['1D','5D'] else "rgba(54,162,235,0.1)", hovertemplate='<b>%{x|%b %d %H:%M}</b><br>$%{y:.2f}<extra></extra>'))
     
-    xa = dict(showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='solid', spikecolor="white", spikethickness=1, gridcolor='#36404e')
+    xa = dict(showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='solid', spikecolor="#ffffff", spikethickness=1, gridcolor='#36404e')
     if x_rng: xa['range'] = x_rng
     fig_p.update_xaxes(**xa)
-    fig_p.update_yaxes(range=y_rng, showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='dash', spikecolor="white", spikethickness=1, gridcolor='#36404e')
-    fig_p.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), height=500, margin=dict(l=0,r=0,t=20,b=0), hovermode="x unified", hoverlabel=dict(bgcolor="#2c3542"))
+    fig_p.update_yaxes(range=y_rng, showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='dash', spikecolor="#ffffff", spikethickness=1, gridcolor='#36404e')
+    fig_p.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), height=500, margin=dict(l=0,r=0,t=20,b=0), hovermode="x unified", hoverlabel=dict(bgcolor="#2c3542", font_size=14, font_family="Segoe UI"))
     chart_placeholder.plotly_chart(fig_p, use_container_width=True)
 else: chart_placeholder.write("Chart Data Unavailable")
 
