@@ -209,7 +209,7 @@ def create_gauge(val, min_v, max_v, title, color="#00d09c", suffix=""):
     fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), height=170, margin=dict(t=50, b=10, l=20, r=20))
     return fig
 
-# --- VARIABLE EXTRACTION ---
+# --- VARIABLE EXTRACTION & CALCULATION ---
 div_rate = info.get('dividendRate', 0)
 if div_rate and current_price and current_price > 0:
     dy = div_rate / current_price
@@ -217,10 +217,31 @@ else:
     dy = info.get('dividendYield', 0) or 0
 
 roe = info.get('returnOnEquity', 0) or 0
-peg = info.get('pegRatio', 0) or 0
 de = info.get('debtToEquity', 0) or 0
 pe = info.get('trailingPE', 0) or 0
 beta = info.get('beta', 1.0) or 1.0
+
+# --- SMART GROWTH & PEG LOGIC ---
+# 1. Get raw PEG from API
+raw_peg = info.get('pegRatio', 0)
+f_eps = info.get('forwardEps', 0) or 0
+t_eps = info.get('trailingEps', 0) or 0
+
+if raw_peg and raw_peg > 0 and pe > 0:
+    # If API PEG is valid, use it to derive "Implied Growth" (Market Consensus)
+    # PEG = PE / Growth  ->  Growth = PE / PEG
+    peg = raw_peg
+    g_rate = (pe / peg) / 100
+elif f_eps > 0 and t_eps > 0:
+    # If API PEG missing, calculate Growth from Estimates, then Calc PEG
+    g_rate = (f_eps - t_eps) / t_eps
+    peg = pe / (g_rate * 100) if g_rate > 0 else 0
+else:
+    # Fallback to trailing growth
+    g_rate = info.get('earningsGrowth', 0) or 0
+    peg = pe / (g_rate * 100) if g_rate > 0 else 0
+
+rev_g = info.get('revenueGrowth', 0) or 0
 
 # --- RUN CALCULATIONS ---
 graham_fv = calc_graham(info)
@@ -263,12 +284,6 @@ s, t = check(current_price < analyst_fv, f"Below Analyst Target ({current_price:
 # 2. FUTURE GROWTH
 f_score = 0
 f_details = []
-f_eps = info.get('forwardEps', 0) or 0
-t_eps = info.get('trailingEps', 0) or 0
-if peg > 0 and pe > 0: g_rate = (pe / peg) / 100
-elif f_eps > 0 and t_eps > 0: g_rate = (f_eps - t_eps) / t_eps
-else: g_rate = info.get('earningsGrowth', 0) or 0
-rev_g = info.get('revenueGrowth', 0) or 0
 s, t = check(g_rate > 0.02, f"Earnings Growth ({g_rate*100:.1f}%) > Savings Rate (2%)"); f_score+=s; f_details.append(t)
 s, t = check(g_rate > 0.10, f"Earnings Growth ({g_rate*100:.1f}%) > Market Avg (10%)"); f_score+=s; f_details.append(t)
 s, t = check(g_rate > 0.20, f"High Growth Earnings > 20%"); f_score+=s; f_details.append(t)
@@ -393,43 +408,56 @@ fill_rgba = f"rgba{hex_to_rgba(flake_color, 0.4)}"
 st.markdown(f"### {info.get('shortName', ticker)} ({ticker})")
 st.write(info.get('longBusinessSummary', '')[:350] + "...")
 
-# --- METRICS ROW (GAUGES + NUMBERS) ---
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Price", f"${current_price:.2f}")
-m2.metric("Market Cap", f"${(info.get('marketCap',0)/1e9):.1f}B")
-m3.metric("Beta", f"{info.get('beta', 0):.2f}")
-m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
+col1, col2 = st.columns([2, 1])
 
-g1, g2, g3 = st.columns(3)
-g1.plotly_chart(create_gauge(beta, 0, 3, "Beta", suffix="x"), use_container_width=True)
-g2.plotly_chart(create_gauge(info.get('marketCap',0)/1e9, 0, 3000, "Market Cap ($B)", color="#36a2eb"), use_container_width=True)
-g3.plotly_chart(create_gauge(current_price, 0, current_price*1.5, "Price ($)"), use_container_width=True)
+with col1:
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Price", f"${current_price:.2f}")
+    m2.metric("Market Cap", f"${(info.get('marketCap',0)/1e9):.1f}B")
+    m3.metric("Beta", f"{info.get('beta', 0):.2f}")
+    m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
 
-st.divider()
+    g1, g2, g3 = st.columns(3)
+    g1.plotly_chart(create_gauge(beta, 0, 3, "Beta", suffix="x"), use_container_width=True)
+    g2.plotly_chart(create_gauge(info.get('marketCap',0)/1e9, 0, 3000, "Market Cap ($B)", color="#36a2eb"), use_container_width=True)
+    g3.plotly_chart(create_gauge(current_price, 0, current_price*1.5, "Price ($)"), use_container_width=True)
 
-# --- SNOWFLAKE & ANALYSIS BREAKDOWN ---
-st.header("Fundamental Analysis")
-
-# Centered Snowflake with Columns
-c_left, c_center, c_right = st.columns([1, 2, 1])
-
-with c_center:
+with col2:
+    # --- SNOWFLAKE ---
     r_vals = final_scores + [final_scores[0]]
     theta_vals = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
-    fig = go.Figure(data=go.Scatterpolar(r=r_vals, theta=theta_vals, fill='toself', line_shape='spline', line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', text=[f"{s}/6" for s in r_vals], marker=dict(size=5)))
-    fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 6], tickvals=[1, 2, 3, 4, 5, 6], showticklabels=False, gridcolor='#444', gridwidth=1.5, layer='below traces'), angularaxis=dict(direction='clockwise', rotation=90, gridcolor='rgba(0,0,0,0)', tickfont=dict(color='white', size=12)), bgcolor='#232b36'), paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=40, b=20, l=40, r=40), showlegend=False, height=400)
+    fig = go.Figure(data=go.Scatterpolar(
+        r=r_vals, theta=theta_vals, fill='toself', line_shape='spline', 
+        line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', 
+        text=[f"{s}/6" for s in r_vals], marker=dict(size=5)
+    ))
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(visible=True, range=[0, 6], tickvals=[1, 2, 3, 4, 5, 6], showticklabels=False, gridcolor='#444', gridwidth=1.5, layer='below traces'),
+            angularaxis=dict(direction='clockwise', rotation=90, gridcolor='rgba(0,0,0,0)', tickfont=dict(color='white', size=12)),
+            bgcolor='#232b36'
+        ),
+        paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=40, b=20, l=40, r=40), showlegend=False, height=350
+    )
     st.plotly_chart(fig, use_container_width=True)
-
-# Analysis Breakdown (Full Width Below)
-with st.expander("📊 See Analysis Breakdown", expanded=True):
-    t1, t2, t3, t4, t5 = st.tabs(["Valuation", "Future Growth", "Past Performance", "Financial Health", "Dividend"])
-    def print_list(items):
-        for x in items: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
-    with t1: st.markdown(f"**Score: {v_score}/6**"); print_list(v_details)
-    with t2: st.markdown(f"**Score: {f_score}/6**"); print_list(f_details)
-    with t3: st.markdown(f"**Score: {p_score}/6**"); print_list(p_details)
-    with t4: st.markdown(f"**Score: {h_score}/6**"); print_list(h_details)
-    with t5: st.markdown(f"**Score: {d_score}/6**"); print_list(d_details)
+    
+    with st.expander("📊 Breakdown"):
+        t1, t2, t3, t4, t5 = st.tabs(["Val", "Fut", "Pst", "Hlt", "Div"])
+        with t1: 
+            st.caption(f"Score: {v_score}/6")
+            for x in v_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
+        with t2: 
+            st.caption(f"Score: {f_score}/6")
+            for x in f_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
+        with t3: 
+            st.caption(f"Score: {p_score}/6")
+            for x in p_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
+        with t4: 
+            st.caption(f"Score: {h_score}/6")
+            for x in h_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
+        with t5: 
+            st.caption(f"Score: {d_score}/6")
+            for x in d_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
 
 st.divider()
 
@@ -460,13 +488,29 @@ def get_ret_fmt(days, fixed=None):
     except: return ""
 
 # Labels for Buttons
-# Note: Buttons are STATIC to prevent reset, data is in strip below
+tf_labels = {}
+ytd_d = datetime(datetime.now().year, 1, 1)
+ret_1d = "(-)"
+if not perf_data.empty: ret_1d = get_ret_fmt(2)
+
+tf_labels["1D"] = f"1D {ret_1d}"
+tf_labels["5D"] = f"5D {get_ret_fmt(6)}"
+tf_labels["1M"] = f"1M {get_ret_fmt(22)}"
+tf_labels["6M"] = f"6M {get_ret_fmt(126)}"
+tf_labels["YTD"] = f"YTD {get_ret_fmt(0, ytd_d)}"
+tf_labels["1Y"] = f"1Y {get_ret_fmt(252)}"
+tf_labels["5Y"] = f"5Y {get_ret_fmt(1260)}"
+tf_labels["Max"] = f"Max {get_ret_fmt(len(perf_data)-1)}"
+
+def format_func(option): return tf_labels.get(option, option)
+
+# Buttons (Static Keys)
 tf_keys = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "Max"]
 if 'tf_sel' not in st.session_state: st.session_state.tf_sel = '1D'
 def update_tf(): pass
 
 # Render Buttons Below the Placeholder spot
-timeframe = st.radio("TF", tf_keys, horizontal=True, label_visibility="collapsed", key="tf_sel", on_change=update_tf)
+timeframe = st.radio("TF", tf_keys, format_func=format_func, horizontal=True, label_visibility="collapsed", key="tf_sel", on_change=update_tf)
 
 # Performance Strip (Dynamic Data)
 ytd_d = datetime(datetime.now().year, 1, 1)
