@@ -218,6 +218,7 @@ else:
     dy = info.get('dividendYield', 0) or 0
 
 roe = info.get('returnOnEquity', 0) or 0
+peg = info.get('pegRatio', 0) or 0
 de = info.get('debtToEquity', 0) or 0
 pe = info.get('trailingPE', 0) or 0
 beta = info.get('beta', 1.0) or 1.0
@@ -383,7 +384,7 @@ payout = info.get('payoutRatio', 0) or 0
 s, t = check(payout < 0.90 and dy > 0, f"Earnings Coverage (Payout {payout*100:.0f}%)"); d_score+=s; d_details.append(t)
 cf_cover = False
 try:
-    div_paid = abs(get_val(cash_flow, ['Cash Dividends Paid']))
+    div_paid = abs(get_val(cash_flow, ['Cash Dividends Paid', 'Common Stock Dividend Paid']))
     fcf = get_val(cash_flow, ['Free Cash Flow'])
     if div_paid < fcf and dy > 0: cf_cover = True
     s, t = check(cf_cover, "Cash Flow Coverage"); d_score+=s; d_details.append(t)
@@ -402,43 +403,44 @@ fill_rgba = f"rgba{hex_to_rgba(flake_color, 0.4)}"
 st.markdown(f"### {info.get('shortName', ticker)} ({ticker})")
 st.write(info.get('longBusinessSummary', '')[:350] + "...")
 
-# --- METRICS ROW (GAUGES + NUMBERS) ---
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Price", f"${current_price:.2f}")
-m2.metric("Market Cap", f"${(info.get('marketCap',0)/1e9):.1f}B")
-m3.metric("Beta", f"{info.get('beta', 0):.2f}")
-m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
+col1, col2 = st.columns([2, 1])
 
-g1, g2, g3 = st.columns(3)
-g1.plotly_chart(create_gauge(beta, 0, 3, "Beta", suffix="x"), use_container_width=True)
-g2.plotly_chart(create_gauge(info.get('marketCap',0)/1e9, 0, 3000, "Market Cap ($B)", color="#36a2eb"), use_container_width=True)
-g3.plotly_chart(create_gauge(current_price, 0, current_price*1.5, "Price ($)"), use_container_width=True)
+with col1:
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Price", f"${current_price:.2f}")
+    m2.metric("Market Cap", f"${(info.get('marketCap',0)/1e9):.1f}B")
+    m3.metric("Beta", f"{info.get('beta', 0):.2f}")
+    m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
 
-st.divider()
+    g1, g2, g3 = st.columns(3)
+    g1.plotly_chart(create_gauge(beta, 0, 3, "Beta", suffix="x"), use_container_width=True)
+    g2.plotly_chart(create_gauge(info.get('marketCap',0)/1e9, 0, 3000, "Market Cap ($B)", color="#36a2eb"), use_container_width=True)
+    g3.plotly_chart(create_gauge(current_price, 0, current_price*1.5, "Price ($)"), use_container_width=True)
 
-# --- SNOWFLAKE & ANALYSIS BREAKDOWN ---
-st.header("Fundamental Analysis")
-
-# Centered Snowflake with Columns
-c_left, c_center, c_right = st.columns([1, 2, 1])
-
-with c_center:
+with col2:
+    # --- SNOWFLAKE ---
     r_vals = final_scores + [final_scores[0]]
     theta_vals = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
     fig = go.Figure(data=go.Scatterpolar(r=r_vals, theta=theta_vals, fill='toself', line_shape='spline', line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', text=[f"{s}/6" for s in r_vals], marker=dict(size=5)))
     fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 6], tickvals=[1, 2, 3, 4, 5, 6], showticklabels=False, gridcolor='#444', gridwidth=1.5, layer='below traces'), angularaxis=dict(direction='clockwise', rotation=90, gridcolor='rgba(0,0,0,0)', tickfont=dict(color='white', size=12)), bgcolor='#232b36'), paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=40, b=20, l=40, r=40), showlegend=False, height=400)
     st.plotly_chart(fig, use_container_width=True)
-
-# Analysis Breakdown (Full Width Below)
-with st.expander("📊 See Analysis Breakdown", expanded=True):
-    t1, t2, t3, t4, t5 = st.tabs(["Valuation", "Future Growth", "Past Performance", "Financial Health", "Dividend"])
-    def print_list(items):
-        for x in items: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
-    with t1: st.markdown(f"**Score: {v_score}/6**"); print_list(v_details)
-    with t2: st.markdown(f"**Score: {f_score}/6**"); print_list(f_details)
-    with t3: st.markdown(f"**Score: {p_score}/6**"); print_list(p_details)
-    with t4: st.markdown(f"**Score: {h_score}/6**"); print_list(h_details)
-    with t5: st.markdown(f"**Score: {d_score}/6**"); print_list(d_details)
+    with st.expander("📊 Breakdown"):
+        t1, t2, t3, t4, t5 = st.tabs(["Val", "Fut", "Pst", "Hlt", "Div"])
+        with t1: 
+            st.caption(f"Score: {v_score}/6")
+            for x in v_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
+        with t2: 
+            st.caption(f"Score: {f_score}/6")
+            for x in f_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
+        with t3: 
+            st.caption(f"Score: {p_score}/6")
+            for x in p_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
+        with t4: 
+            st.caption(f"Score: {h_score}/6")
+            for x in h_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
+        with t5: 
+            st.caption(f"Score: {d_score}/6")
+            for x in d_details: st.markdown(f"<div class='check-item'>{x}</div>", unsafe_allow_html=True)
 
 st.divider()
 
@@ -469,7 +471,23 @@ def get_ret_fmt(days, fixed=None):
     except: return ""
 
 # Labels for Buttons
-# Note: Buttons are STATIC to prevent reset, data is in strip below
+tf_labels = {}
+ytd_d = datetime(datetime.now().year, 1, 1)
+ret_1d = "(-)"
+if not perf_data.empty: ret_1d = get_ret_fmt(2)
+
+tf_labels["1D"] = f"1D {ret_1d}"
+tf_labels["5D"] = f"5D {get_ret_fmt(6)}"
+tf_labels["1M"] = f"1M {get_ret_fmt(22)}"
+tf_labels["6M"] = f"6M {get_ret_fmt(126)}"
+tf_labels["YTD"] = f"YTD {get_ret_fmt(0, ytd_d)}"
+tf_labels["1Y"] = f"1Y {get_ret_fmt(252)}"
+tf_labels["5Y"] = f"5Y {get_ret_fmt(1260)}"
+tf_labels["Max"] = f"Max {get_ret_fmt(len(perf_data)-1)}"
+
+def format_func(option): return tf_labels.get(option, option)
+
+# Buttons (Static Keys)
 tf_keys = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "Max"]
 if 'tf_sel' not in st.session_state: st.session_state.tf_sel = '1D'
 def update_tf(): pass
@@ -641,7 +659,7 @@ with d2:
     payout = info.get('payoutRatio', 0) or 0
     if payout > 0:
         fig_pay = go.Figure(data=[go.Pie(labels=['Payout', 'Retained'], values=[payout, 1-payout], hole=.7, marker=dict(colors=['#36a2eb', '#232b36']), textinfo='none', hoverinfo='label+percent')])
-        fig_pay.update_layout(showlegend=False, height=300, margin=dict(t=20, b=20, l=20, r=20), paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), annotations=[dict(text=f"<span style='font-size:12px; color:#8c97a7'>Payout Ratio</span><br><span style='font-size:28px; font-weight:bold'>{payout*100:.0f}%</span>", x=0.5, y=0.5, showarrow=False)])
+        fig_pay.update_layout(title={'text': "Payout Ratio", 'x': 0.5, 'font': {'size': 14, 'color': '#8c97a7'}}, showlegend=False, height=300, margin=dict(t=50, b=20, l=20, r=20), paper_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), annotations=[dict(text=f"<span style='font-size:28px; font-weight:bold'>{payout*100:.0f}%</span>", x=0.5, y=0.5, showarrow=False)])
         st.plotly_chart(fig_pay, use_container_width=True)
     else: st.write("No Dividend Payout")
 
