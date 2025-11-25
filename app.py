@@ -31,18 +31,27 @@ st.markdown("""
         flex-wrap: wrap;
         gap: 5px; 
         width: 100%;
+        background-color: #232b36;
+        padding: 10px;
+        border-radius: 10px;
     }
     div[data-testid="stRadio"] label {
-        background-color: #232b36;
-        padding: 5px 10px;
+        background-color: #1b222d;
+        padding: 5px 12px;
         border-radius: 5px;
         border: 1px solid #36404e;
         cursor: pointer;
         flex-grow: 1;
         text-align: center;
-        font-size: 0.9rem;
+        font-size: 0.85rem;
+        color: white;
     }
     div[data-testid="stRadio"] label:hover { border-color: #00d09c; color: #00d09c; }
+    /* Highlight selected option (Streamlit specific hack) */
+    div[data-testid="stRadio"] div[role="radiogroup"] > label[data-baseweb="radio"] > div:first-child {
+        background-color: #00d09c !important;
+        border-color: #00d09c !important;
+    }
     
     /* Checklist Styles */
     .check-item { margin-bottom: 8px; font-size: 0.9rem; }
@@ -151,7 +160,6 @@ def calc_dcf(stock, info):
 
 # --- HELPER: ROBUST DATA EXTRACTION ---
 def get_val(df, keys_list):
-    """Safely retrieves the first matching key from a DataFrame or returns 0"""
     for k in keys_list:
         if k in df.columns:
             val = df[k].iloc[0]
@@ -159,7 +167,6 @@ def get_val(df, keys_list):
     return 0
 
 def get_debt(df):
-    """Tries to find Total Debt, or sums component debts if Total is missing"""
     d = get_val(df, ['Total Debt', 'Total Financial Debt'])
     if d == 0:
         long_term = get_val(df, ['Long Term Debt', 'Long Term Debt And Capital Lease Obligation'])
@@ -168,7 +175,6 @@ def get_debt(df):
     return d
 
 def fmt_num(num):
-    """Formats large numbers for display in checklist"""
     if num is None or num == 0: return "N/A"
     if abs(num) >= 1e9: return f"${num/1e9:.1f}B"
     if abs(num) >= 1e6: return f"${num/1e6:.1f}M"
@@ -210,7 +216,7 @@ def check(condition, text):
     if condition: return 1, f"✅ {text}"
     else: return 0, f"❌ {text}"
 
-# --- 6-POINT CHECKLIST SCORING ENGINE (WITH VALUES) ---
+# --- 6-POINT CHECKLIST SCORING ENGINE ---
 
 # 1. VALUATION (6 Points)
 v_score = 0
@@ -227,7 +233,6 @@ f_score = 0
 f_details = []
 f_eps = info.get('forwardEps', 0) or 0
 t_eps = info.get('trailingEps', 0) or 0
-
 if peg > 0 and pe > 0: g_rate = (pe / peg) / 100
 elif f_eps > 0 and t_eps > 0: g_rate = (f_eps - t_eps) / t_eps
 else: g_rate = info.get('earningsGrowth', 0) or 0
@@ -373,7 +378,6 @@ with col1:
     m3.metric("Beta", f"{info.get('beta', 0):.2f}")
     m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
 with col2:
-    # SNOWFLAKE
     r_vals = final_scores + [final_scores[0]]
     theta_vals = ['Value', 'Future', 'Past', 'Health', 'Dividend', 'Value']
     fig = go.Figure(data=go.Scatterpolar(r=r_vals, theta=theta_vals, fill='toself', line_shape='spline', line_color=flake_color, fillcolor=fill_rgba, hoverinfo='text', text=[f"{s}/6" for s in r_vals], marker=dict(size=5)))
@@ -405,7 +409,7 @@ st.header("Price History")
 # Placeholder for Graph
 chart_placeholder = st.empty()
 
-# 1. PRE-FETCH MAX HISTORY FOR LABELS
+# 1. PRE-FETCH MAX HISTORY FOR LABELS (Cached to prevent flicker)
 perf_data = stock.history(period="max", interval="1d")
 if not perf_data.empty:
     if perf_data.index.tz is not None:
@@ -456,9 +460,6 @@ timeframe_map = {
 }
 
 # 2. RENDER BUTTONS (Using format_func to show percentages but keep static keys)
-# We pass the list of static keys ["1D", "5D"...] to the radio button.
-# format_func then looks up the dynamic label in a reverse map.
-
 static_keys = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "Max"]
 # Build reverse lookup for format_func
 key_to_label = {v: k for k, v in timeframe_map.items()}
@@ -467,7 +468,23 @@ def format_func(option):
     return key_to_label.get(option, option)
 
 # The selection variable will hold the STATIC key (e.g. "1D")
-timeframe = st.radio("Timeframe", static_keys, format_func=format_func, horizontal=True, label_visibility="collapsed")
+# Store selection in session state to persist across reruns
+if 'tf_selection' not in st.session_state:
+    st.session_state.tf_selection = '1D'
+
+def update_tf():
+    # Callback to handle state if needed (optional but good for debugging)
+    pass
+
+timeframe = st.radio(
+    "Timeframe", 
+    static_keys, 
+    format_func=format_func, 
+    horizontal=True, 
+    label_visibility="collapsed",
+    key="tf_selection",
+    on_change=update_tf
+)
 
 # 3. FETCH CHART DATA BASED ON SELECTION
 start_range = None
