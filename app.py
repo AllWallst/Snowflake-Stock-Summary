@@ -106,11 +106,12 @@ def get_stock_data(ticker):
         history = stock.history(period="max", interval="1d")
         if history.index.tz is not None:
             history.index = history.index.tz_localize(None)
-            
-        return stock, info, financials, balance_sheet, cash_flow, q_financials, q_balance_sheet, div_history, news, history
+        
+        # IMPORTANT: Do NOT return the 'stock' object itself, it is not serializable.
+        return info, financials, balance_sheet, cash_flow, q_financials, q_balance_sheet, div_history, news, history
     except Exception as e:
         print(f"Error fetching data: {e}")
-        return None, None, None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None
 
 # --- TOP SEARCH BAR ---
 col_search1, col_search2 = st.columns([1, 3])
@@ -137,7 +138,8 @@ if "ticker" not in st.query_params:
     st.query_params["ticker"] = "AAPL"
 ticker = st.query_params["ticker"]
 
-stock, info, financials, balance_sheet, cash_flow, q_financials, q_balance_sheet, div_history, news_list, full_history = get_stock_data(ticker)
+# Unpacking the data (Removed 'stock' from the tuple)
+info, financials, balance_sheet, cash_flow, q_financials, q_balance_sheet, div_history, news_list, full_history = get_stock_data(ticker)
 
 if not info or 'currentPrice' not in info:
     st.error(f"Ticker '{ticker}' not found or data unavailable.")
