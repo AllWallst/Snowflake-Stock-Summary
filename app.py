@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
 import requests
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 # --- PAGE CONFIGURATION ---
@@ -57,7 +57,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- SEARCH FUNCTION ---
+# --- CACHED DATA FETCHING FUNCTIONS ---
 @st.cache_data(ttl=3600)
 def search_symbol(query):
     if not query: return []
@@ -78,6 +78,40 @@ def search_symbol(query):
     except:
         return []
 
+@st.cache_data(ttl=3600)
+def get_stock_data(ticker):
+    try:
+        stock = yf.Ticker(ticker)
+        # Accessing info triggers the request
+        info = stock.info
+        
+        # Helper to safely get dataframes
+        def get_df(attr):
+            try: return getattr(stock, attr).T
+            except: return pd.DataFrame()
+            
+        financials = get_df('financials')
+        balance_sheet = get_df('balance_sheet')
+        cash_flow = get_df('cashflow')
+        
+        # Quarterly
+        q_financials = get_df('quarterly_financials')
+        q_balance_sheet = get_df('quarterly_balance_sheet')
+        
+        div_history = stock.dividends
+        news = stock.news
+        
+        # Fetch max history once to be sliced later for performance metrics and charts
+        # This saves multiple API calls
+        history = stock.history(period="max", interval="1d")
+        if history.index.tz is not None:
+            history.index = history.index.tz_localize(None)
+            
+        return stock, info, financials, balance_sheet, cash_flow, q_financials, q_balance_sheet, div_history, news, history
+    except Exception as e:
+        print(f"Error fetching data: {e}")
+        return None, None, None, None, None, None, None, None, None, None
+
 # --- TOP SEARCH BAR ---
 col_search1, col_search2 = st.columns([1, 3])
 with col_search1:
@@ -85,7 +119,6 @@ with col_search1:
 with col_search2:
     search_query = st.text_input("🔎 Search Stock (Company Name or Ticker)", placeholder="e.g. Apple, Shopify, RY.TO...")
 
-# Handle Search Logic
 if search_query:
     search_results = search_symbol(search_query)
     if "Canada (TSX)" in exchange: search_results = [x for x in search_results if ".TO" in x[1]]
@@ -99,35 +132,22 @@ if search_query:
     else:
         st.warning("No matching stocks found.")
 
-# --- URL & STATE MANAGEMENT ---
+# --- URL & DATA LOADING ---
 if "ticker" not in st.query_params:
     st.query_params["ticker"] = "AAPL"
 ticker = st.query_params["ticker"]
 
-# --- FETCH DATA ---
-news_list = [] 
-try:
-    stock = yf.Ticker(ticker)
-    info = stock.info
-    current_price = info.get('currentPrice') or info.get('regularMarketPrice')
-    
-    if not current_price:
-        st.error(f"Ticker '{ticker}' not found. Please check the symbol.")
-        st.stop()
-        
-    # Fetch Financials & History
-    financials = stock.financials.T
-    balance_sheet = stock.balance_sheet.T
-    cash_flow = stock.cashflow.T
-    div_history = stock.dividends
-    news_list = stock.news
-    
-except Exception as e:
-    st.error(f"Error fetching data: {e}")
+stock, info, financials, balance_sheet, cash_flow, q_financials, q_balance_sheet, div_history, news_list, full_history = get_stock_data(ticker)
+
+if not info or 'currentPrice' not in info:
+    st.error(f"Ticker '{ticker}' not found or data unavailable.")
     st.stop()
+
+current_price = info.get('currentPrice') or info.get('regularMarketPrice')
 
 # --- HELPER FUNCTIONS ---
 def get_val(df, keys_list):
+    if df.empty: return 0
     for k in keys_list:
         if k in df.columns:
             val = df[k].iloc[0]
@@ -141,12 +161,6 @@ def get_debt(df):
         short_term = get_val(df, ['Current Debt', 'Current Debt And Capital Lease Obligation', 'Commercial Paper'])
         d = long_term + short_term
     return d
-
-def fmt_num(num):
-    if num is None or num == 0: return "N/A"
-    if abs(num) >= 1e9: return f"${num/1e9:.1f}B"
-    if abs(num) >= 1e6: return f"${num/1e6:.1f}M"
-    return f"${num:.2f}"
 
 def get_news_data(article):
     title = article.get('title')
@@ -177,30 +191,72 @@ def get_news_data(article):
         except: pass
     return title, link, publisher, article.get('providerPublishTime', 0)
 
+# --- UPDATED MATH FUNCTIONS ---
+
 def calc_graham(info):
+    # Added safety check: Graham number fails if EPS or BV are negative
     eps = info.get('trailingEps', 0)
     bv = info.get('bookValue', 0)
     if eps > 0 and bv > 0: return np.sqrt(22.5 * eps * bv)
     return 0
 
-def calc_dcf(stock, info):
+def calc_dcf(info, cash_flow):
     try:
-        if 'Free Cash Flow' in cash_flow.columns: fcf_latest = cash_flow['Free Cash Flow'].iloc[0]
+        # 1. Determine Base Free Cash Flow
+        if not cash_flow.empty and 'Free Cash Flow' in cash_flow.columns:
+            fcf_latest = cash_flow['Free Cash Flow'].iloc[0]
+        elif not cash_flow.empty:
+            # Fallback: OCF + CapEx (CapEx is usually negative)
+            ocf = get_val(cash_flow, ['Total Cash From Operating Activities'])
+            capex = get_val(cash_flow, ['Capital Expenditures'])
+            fcf_latest = ocf + capex
         else:
-            ocf = cash_flow['Total Cash From Operating Activities'].iloc[0]
-            capex = cash_flow['Capital Expenditures'].iloc[0]
-            fcf_latest = ocf + capex 
-        growth_rate = min(info.get('earningsGrowth', 0.10) or 0.08, 0.20)
-        discount_rate = 0.09 
+            return 0, 0, 0
+
+        # 2. Dynamic Discount Rate (WACC / Cost of Equity)
+        # Risk Free Rate ~4.2% (10Y Treasury), Market Return ~10%
+        risk_free = 0.042
+        market_return = 0.10
+        beta = info.get('beta', 1.0)
+        if beta is None: beta = 1.0
+        
+        # Cost of Equity = Rf + Beta * (Rm - Rf)
+        discount_rate = risk_free + beta * (market_return - risk_free)
+        # Clamp discount rate for sanity (6% to 15%)
+        discount_rate = max(0.06, min(discount_rate, 0.15))
+
+        # 3. Growth Rate
+        # Use analyst estimate, cap at 20% to be conservative
+        growth_rate = info.get('earningsGrowth', 0.10)
+        if growth_rate is None: growth_rate = 0.05
+        growth_rate = min(growth_rate, 0.20)
+
+        # 4. Projection
         future_cash_flows = []
         for i in range(1, 6):
-            future_cash_flows.append((fcf_latest * ((1 + growth_rate) ** i)) / ((1 + discount_rate) ** i))
-        term_val = (fcf_latest * ((1 + growth_rate) ** 5) * 1.025) / (discount_rate - 0.025)
-        dcf_val = (sum(future_cash_flows) + (term_val / ((1 + discount_rate) ** 5))) / info.get('sharesOutstanding', 1)
-        return dcf_val, growth_rate
-    except: return 0, 0
+            # FCF * (1+g)^i / (1+r)^i
+            val = (fcf_latest * ((1 + growth_rate) ** i)) / ((1 + discount_rate) ** i)
+            future_cash_flows.append(val)
+        
+        # 5. Terminal Value (Gordon Growth Method)
+        # Terminal Growth 2.5% (Inflation)
+        perp_growth = 0.025
+        fcf_year_5 = fcf_latest * ((1 + growth_rate) ** 5)
+        # Value at Year 5 = FCF5 * (1+g) / (r - g)
+        term_val = (fcf_year_5 * (1 + perp_growth)) / (discount_rate - perp_growth)
+        # Discount Terminal Value back to today
+        term_val_discounted = term_val / ((1 + discount_rate) ** 5)
+        
+        total_equity_val = sum(future_cash_flows) + term_val_discounted
+        shares = info.get('sharesOutstanding', 1)
+        dcf_val = total_equity_val / shares
+        
+        return dcf_val, growth_rate, discount_rate
+    except:
+        return 0, 0, 0
 
 def create_gauge(val, min_v, max_v, title, color="#00d09c", suffix=""):
+    if val is None: val = 0
     fig = go.Figure(go.Indicator(
         mode="gauge+number", value=val, title={'text': title, 'font': {'size': 14, 'color': '#8c97a7'}},
         number={'suffix': suffix, 'font': {'size': 20}},
@@ -222,24 +278,20 @@ de = info.get('debtToEquity', 0) or 0
 pe = info.get('trailingPE', 0) or 0
 beta = info.get('beta', 1.0) or 1.0
 
-# FIX: Calculate PEG manually if missing or 0 (Prioritize Forward EPS Growth)
+# PEG Logic - fallback to "N/A" rather than 1-year calc which is volatile
 peg = info.get('pegRatio', 0)
-if (peg is None or peg == 0) and pe > 0:
-    f_eps = info.get('forwardEps', 0); t_eps = info.get('trailingEps', 0)
-    if f_eps > t_eps > 0: peg = pe / (((f_eps - t_eps) / t_eps) * 100)
-    elif info.get('earningsGrowth', 0) > 0: peg = pe / (info.get('earningsGrowth', 0) * 100)
-    else: peg = 0
+if peg is None: peg = 0 
 
 # --- RUN CALCULATIONS ---
 graham_fv = calc_graham(info)
-dcf_fv, dcf_growth = calc_dcf(stock, info)
+dcf_fv, dcf_growth, dcf_disc = calc_dcf(info, cash_flow)
 analyst_fv = info.get('targetMeanPrice', 0)
 
 val_method = st.session_state.val_method
 
 if val_method == "Discounted Cash Flow (DCF)":
     fair_value = dcf_fv
-    calc_desc = f"2-Stage DCF Model (Growth: {dcf_growth*100:.1f}%, Discount: 9%)"
+    calc_desc = f"5Y DCF Model (Growth: {dcf_growth*100:.1f}%, Disc: {dcf_disc*100:.1f}%)"
 elif val_method == "Graham Formula":
     fair_value = graham_fv
     calc_desc = "Graham Number (Sqrt(22.5 * EPS * Book Value))"
@@ -247,7 +299,7 @@ else:
     fair_value = analyst_fv
     calc_desc = "Average Analyst Price Target"
 
-if fair_value == 0 or np.isnan(fair_value):
+if fair_value == 0 or np.isnan(fair_value) or fair_value < 0:
     fair_value = current_price
     calc_desc = "Data insufficient (Market Price used)"
 
@@ -265,17 +317,16 @@ s, t = check(current_price < fair_value * 0.8, f"Significantly Below Fair Value 
 s, t = check(pe > 0 and pe < 25, f"P/E ({pe:.1f}x) < Market (25x)"); v_score+=s; v_details.append(t)
 s, t = check(pe > 0 and pe < 35, f"P/E ({pe:.1f}x) < Peers (35x)"); v_score+=s; v_details.append(t)
 s, t = check(peg > 0 and peg < 1.5, f"PEG Ratio within ideal range ({peg:.2f} < 1.5x)"); v_score+=s; v_details.append(t)
-s, t = check(current_price < analyst_fv, f"Below Analyst Target ({current_price:.2f} < {analyst_fv:.2f})"); v_score+=s; v_details.append(t)
+s, t = check(analyst_fv > 0 and current_price < analyst_fv, f"Below Analyst Target ({current_price:.2f} < {analyst_fv:.2f})"); v_score+=s; v_details.append(t)
 
 # 2. FUTURE GROWTH
 f_score = 0
 f_details = []
-f_eps = info.get('forwardEps', 0) or 0
-t_eps = info.get('trailingEps', 0) or 0
+# Prefer PEG implied growth, else fallback to analyst estimates
 if peg > 0 and pe > 0: g_rate = (pe / peg) / 100
-elif f_eps > 0 and t_eps > 0: g_rate = (f_eps - t_eps) / t_eps
 else: g_rate = info.get('earningsGrowth', 0) or 0
 rev_g = info.get('revenueGrowth', 0) or 0
+
 s, t = check(g_rate > 0.02, f"Earnings Growth ({g_rate*100:.1f}%) > Savings Rate (2%)"); f_score+=s; f_details.append(t)
 s, t = check(g_rate > 0.10, f"Earnings Growth ({g_rate*100:.1f}%) > Market Avg (10%)"); f_score+=s; f_details.append(t)
 s, t = check(g_rate > 0.20, f"High Growth Earnings > 20%"); f_score+=s; f_details.append(t)
@@ -303,17 +354,25 @@ try:
             s, t = check(eps_growth_1y > 0.12, f"EPS Growth ({eps_growth_1y*100:.1f}%) > Industry (12%)"); p_score+=s; p_details.append(t)
             s, t = check(curr_eps > oldest_eps, f"Long Term Growth (EPS: {curr_eps:.2f} > {oldest_eps:.2f})"); p_score+=s; p_details.append(t)
             years = len(eps_series) - 1
+            
+            # MATH FIX: Ensure oldest_eps > 0 for CAGR calculation
             if years > 0 and oldest_eps > 0 and curr_eps > 0:
                 cagr = (curr_eps / oldest_eps) ** (1/years) - 1
                 s, t = check(eps_growth_1y > cagr, f"Accelerating Growth > {cagr*100:.1f}% Avg"); p_score+=s; p_details.append(t)
-            else: p_details.append("❌ Accelerated Growth (Data Gap)")
+            else: 
+                s, t = 0, "❌ Accelerating Growth (N/A or Neg EPS)"
+                p_score+=s; p_details.append(t)
+                
             s, t = check(roe > 0.20, f"High ROE ({roe*100:.1f}% > 20%)"); p_score+=s; p_details.append(t)
+            
+            # ROCE Calculation
             def get_roce(idx):
                 try: return hist_fin['EBIT'].iloc[idx] / (hist_bs['Total Assets'].iloc[idx] - hist_bs['Current Liabilities'].iloc[idx])
                 except: return 0
             curr_roce = get_roce(-1)
             old_roce = get_roce(-3) if len(hist_fin) >= 3 else get_roce(0)
             s, t = check(curr_roce > old_roce, f"ROCE Trend ({curr_roce*100:.1f}% > {old_roce*100:.1f}%)"); p_score+=s; p_details.append(t)
+            
             roa = info.get('returnOnAssets', 0)
             s, t = check(roa > 0.06, f"ROA ({roa*100:.1f}%) > Industry (6%)"); p_score+=s; p_details.append(t)
         else: p_details.append("❌ Insufficient Historical Data")
@@ -383,6 +442,9 @@ cf_cover = False
 try:
     div_paid = abs(get_val(cash_flow, ['Cash Dividends Paid', 'Common Stock Dividend Paid']))
     fcf = get_val(cash_flow, ['Free Cash Flow'])
+    if fcf == 0: # Fallback calc if FCF missing
+         fcf = get_val(cash_flow, ['Total Cash From Operating Activities']) + get_val(cash_flow, ['Capital Expenditures'])
+    
     if div_paid < fcf and dy > 0: cf_cover = True
     s, t = check(cf_cover, "Cash Flow Coverage"); d_score+=s; d_details.append(t)
 except: d_details.append("❌ Cash Flow Coverage (Data Gap)")
@@ -427,7 +489,7 @@ with c_center:
     fig.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 6], tickvals=[1, 2, 3, 4, 5, 6], showticklabels=False, gridcolor='#444', gridwidth=1.5, layer='below traces'), angularaxis=dict(direction='clockwise', rotation=90, gridcolor='rgba(0,0,0,0)', tickfont=dict(color='white', size=12)), bgcolor='#232b36'), paper_bgcolor='rgba(0,0,0,0)', margin=dict(t=40, b=20, l=40, r=40), showlegend=False, height=400)
     st.plotly_chart(fig, use_container_width=True)
 
-# Analysis Breakdown (Full Width Below)
+# Analysis Breakdown
 with st.expander("📊 See Analysis Breakdown", expanded=True):
     t1, t2, t3, t4, t5 = st.tabs(["Valuation", "Future Growth", "Past Performance", "Financial Health", "Dividend"])
     def print_list(items):
@@ -440,69 +502,47 @@ with st.expander("📊 See Analysis Breakdown", expanded=True):
 
 st.divider()
 
-# --- PRICE HISTORY ---
+# --- PRICE HISTORY & PERFORMANCE ---
 st.header("Price History")
 
-# Placeholder for the Graph
-chart_placeholder = st.empty()
-
-# 1. PRE-FETCH MAX HISTORY FOR LABELS
-perf_data = stock.history(period="max", interval="1d")
-if not perf_data.empty:
-    if perf_data.index.tz is not None:
-        perf_data.index = perf_data.index.tz_localize(None)
-    curr_c = perf_data['Close'].iloc[-1]
-else:
-    curr_c = 0
-
-def get_ret_fmt(days, fixed=None):
-    try:
-        if fixed: 
-            idx = perf_data.index.get_indexer([pd.to_datetime(fixed)], method='nearest')[0]
-            p = perf_data['Close'].iloc[idx]
-        else: p = perf_data['Close'].iloc[-days]
-        ret = ((curr_c - p)/p)*100
-        sign = "+" if ret >=0 else ""
-        return f"({sign}{ret:.1f}%)"
-    except: return ""
-
 # Labels for Buttons
-# Note: Buttons are STATIC to prevent reset, data is in strip below
 tf_keys = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y", "Max"]
-if 'tf_sel' not in st.session_state: st.session_state.tf_sel = '1D'
 def update_tf(): pass
-
-# Render Buttons Below the Placeholder spot
 timeframe = st.radio("TF", tf_keys, horizontal=True, label_visibility="collapsed", key="tf_sel", on_change=update_tf)
 
-# Performance Strip (Dynamic Data)
-ytd_d = datetime(datetime.now().year, 1, 1)
-ret_1d = "(-)"
-if not perf_data.empty: ret_1d = get_ret_fmt(2)
+# Helper to slice the cached full_history
+def get_chart_data(full_history, tf):
+    if full_history.empty: return pd.DataFrame()
+    end_date = full_history.index[-1]
+    
+    # For 1D and 5D, yfinance history(period='max') usually returns daily data only.
+    # To get intraday 1m/5m data, we must fetch fresh.
+    # BUT to avoid API lag, we only do it if strictly necessary, otherwise we use daily for long views.
+    
+    if tf == '1D':
+        # Must fetch fresh for intraday
+        try: return yf.Ticker(ticker).history(period='1d', interval='5m', prepost=True)
+        except: return full_history.iloc[-1:] # Fallback
+    elif tf == '5D':
+         try: return yf.Ticker(ticker).history(period='5d', interval='15m', prepost=True)
+         except: return full_history.iloc[-5:] # Fallback
+    
+    # For others, slice the Daily max history
+    start_date = None
+    if tf == '1M': start_date = end_date - timedelta(days=30)
+    elif tf == '6M': start_date = end_date - timedelta(days=180)
+    elif tf == 'YTD': start_date = datetime(end_date.year, 1, 1)
+    elif tf == '1Y': start_date = end_date - timedelta(days=365)
+    elif tf == '5Y': start_date = end_date - timedelta(days=365*5)
+    else: return full_history # Max
+    
+    return full_history[full_history.index >= pd.Timestamp(start_date)]
 
-def get_color(val_str):
-    if "+" in val_str: return "pos"
-    if "-" in val_str: return "neg"
-    return ""
-
-# Logic
-df = pd.DataFrame()
-y_rng = None; x_rng = None
-
-if timeframe == '1D':
-    df = stock.history(period='1d', interval='5m', prepost=True)
-    if not df.empty:
-        ldt = df.index[-1]
-        x_rng = [ldt.replace(hour=7, minute=30), ldt.replace(hour=18, minute=0)]
-elif timeframe == '5D': df = stock.history(period='5d', interval='15m', prepost=True)
-elif timeframe == '1M': df = stock.history(period='1mo', interval='1d')
-elif timeframe == '6M': df = stock.history(period='6mo', interval='1d')
-elif timeframe == 'YTD': df = stock.history(period='ytd', interval='1d')
-elif timeframe == '1Y': df = stock.history(period='1y', interval='1d')
-elif timeframe == '5Y': df = stock.history(period='5y', interval='1d')
-elif timeframe == 'Max': df = stock.history(period='max', interval='1d')
+df = get_chart_data(full_history, timeframe)
+chart_placeholder = st.empty()
 
 if not df.empty:
+    curr_c = df['Close'].iloc[-1]
     ymin = df['Close'].min(); ymax = df['Close'].max()
     buff = (ymax - ymin)*0.05 if ymax!=ymin else ymax*0.01
     y_rng = [ymin - buff, ymax + buff]
@@ -510,10 +550,7 @@ if not df.empty:
     fig_p = go.Figure()
     fig_p.add_trace(go.Scatter(x=df.index, y=df['Close'], mode='lines', name='Close', line=dict(color='#36a2eb' if timeframe in ['1D','5D'] else '#00d09c', width=2), fill='tozeroy', fillcolor=f"rgba(0,208,156,0.1)" if timeframe not in ['1D','5D'] else "rgba(54,162,235,0.1)", hovertemplate='<b>%{x|%b %d %H:%M}</b><br>$%{y:.2f}<extra></extra>'))
     
-    xa = dict(showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='solid', spikecolor="white", spikethickness=1, gridcolor='#36404e')
-    if timeframe == '1D' and x_rng: xa['range'] = x_rng
-    
-    fig_p.update_xaxes(**xa)
+    fig_p.update_xaxes(showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='solid', spikecolor="white", spikethickness=1, gridcolor='#36404e')
     fig_p.update_yaxes(range=y_rng, showspikes=True, spikemode='across', spikesnap='cursor', showline=False, spikedash='dash', spikecolor="white", spikethickness=1, gridcolor='#36404e')
     fig_p.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), height=500, margin=dict(l=0,r=0,t=20,b=0), hovermode="x unified", hoverlabel=dict(bgcolor="#2c3542", font_size=14, font_family="Segoe UI"))
     
@@ -521,15 +558,38 @@ if not df.empty:
 else:
     chart_placeholder.write("Price data unavailable for this timeframe.")
 
-# Performance Strip Below Buttons
-v_1d = ret_1d
-v_5d = get_ret_fmt(6)
-v_1m = get_ret_fmt(22)
-v_6m = get_ret_fmt(126)
-v_ytd = get_ret_fmt(0, ytd_d)
-v_1y = get_ret_fmt(252)
-v_5y = get_ret_fmt(1260)
-v_max = get_ret_fmt(len(perf_data)-1)
+# Performance Strip Calculation (using cached full_history)
+def get_ret(days, fixed=None):
+    if full_history.empty: return "N/A"
+    try:
+        curr = full_history['Close'].iloc[-1]
+        if fixed:
+            # Find closest index
+            idx = full_history.index.get_indexer([pd.Timestamp(fixed)], method='nearest')[0]
+            past = full_history['Close'].iloc[idx]
+        else:
+            if len(full_history) < days: return "N/A"
+            past = full_history['Close'].iloc[-days]
+        
+        ret = ((curr - past)/past)*100
+        sign = "+" if ret >=0 else ""
+        return f"{sign}{ret:.1f}%"
+    except: return "N/A"
+
+def get_color(val_str):
+    if "+" in val_str: return "pos"
+    if "-" in val_str: return "neg"
+    return ""
+
+# Note: 1D perf here is from previous close of Max history, might differ slightly from realtime 5m data
+v_1d = get_ret(2) 
+v_5d = get_ret(6)
+v_1m = get_ret(22)
+v_6m = get_ret(126)
+v_ytd = get_ret(0, datetime(datetime.now().year, 1, 1))
+v_1y = get_ret(252)
+v_5y = get_ret(1260)
+v_max = get_ret(len(full_history)-1)
 
 st.markdown(f"""
 <div class="perf-container">
@@ -546,11 +606,11 @@ st.markdown(f"""
 
 st.divider()
 
-# --- 1. VALUATION ---
+# --- 1. VALUATION UI ---
 st.header("1. Valuation")
 c_val1, c_val2 = st.columns([2, 1])
 with c_val1:
-    st.subheader("Fair Value Analysis")
+    st.subheader(f"Fair Value: {calc_desc}")
     def update_val_method(): pass
     st.radio("Method", ["Discounted Cash Flow (DCF)", "Graham Formula", "Analyst Target"], key="val_method", on_change=update_val_method, horizontal=True)
     max_v = max(current_price, fair_value) * 1.3
@@ -575,7 +635,6 @@ st.divider()
 st.header("2. Future Growth")
 f1, f2 = st.columns(2)
 with f1:
-    # --- REPLACED LINES 577-596 WITH THIS ---
     fig_f = go.Figure(data=[
         go.Bar(name='Company', x=['Growth'], y=[g_rate*100], marker_color='#36a2eb', text=[f"{g_rate*100:.1f}%"], textposition='auto'),
         go.Bar(name='Market', x=['Growth'], y=[10.0], marker_color='#ff6384', text=["10.0%"], textposition='auto'),
@@ -584,9 +643,7 @@ with f1:
     fig_f.update_layout(barmode='group', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='white'), title="Annual Forecast", height=250, showlegend=True, margin=dict(t=30, b=10, l=10, r=10))
     st.plotly_chart(fig_f, use_container_width=True)
 with f2:
-    # Replaced Bullet with Gauge per request "choose a better graph"
     st.plotly_chart(create_gauge(roe*100, 0, max(30, roe*100), "Future Return on Equity (ROE)", suffix="%"), use_container_width=True)
-    # --- END REPLACEMENT ---
 
 st.divider()
 
@@ -604,16 +661,18 @@ st.divider()
 st.header("4. Financial Health")
 fin_freq = st.radio("Frequency:", ["Quarterly", "Annual"], horizontal=True)
 if fin_freq == "Annual":
-    f_data = stock.financials.T.iloc[::-1]; b_data = stock.balance_sheet.T.iloc[::-1]
+    f_data = financials.iloc[::-1]; b_data = balance_sheet.iloc[::-1]
     d_fmt = "%Y"
 else:
-    f_data = stock.quarterly_financials.T.iloc[::-1]; b_data = stock.quarterly_balance_sheet.T.iloc[::-1]
+    f_data = q_financials.iloc[::-1]; b_data = q_balance_sheet.iloc[::-1]
     d_fmt = "%Y-%m"
-d_lbls = [d.strftime(d_fmt) for d in f_data.index]
+    
+if not f_data.empty: d_lbls = [d.strftime(d_fmt) for d in f_data.index]
+else: d_lbls = []
 
 h1, h2 = st.columns([2, 1])
 with h1:
-    if not b_data.empty:
+    if not b_data.empty and len(b_data) > 0:
         d_vals = [get_debt(pd.DataFrame(b_data.iloc[[i]])) for i in range(len(b_data))]
         c_vals = [get_val(pd.DataFrame(b_data.iloc[[i]]), ['Cash And Cash Equivalents', 'Cash']) for i in range(len(b_data))]
         fig_h = go.Figure()
