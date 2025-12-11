@@ -19,8 +19,8 @@ st.markdown("""
     <style>
     .stApp { background-color: #1b222d; color: white; }
     h1, h2, h3, h4 { color: #00d09c !important; }
-    div[data-testid="stMetricValue"] { font-size: 1.4rem !important; color: white !important; }
-    div[data-testid="stMetricLabel"] { color: #8c97a7 !important; }
+    div[data-testid="stMetricValue"] { font-size: 1.3rem !important; color: white !important; }
+    div[data-testid="stMetricLabel"] { color: #8c97a7 !important; font-size: 0.9rem !important; }
     .css-1d391kg { background-color: #232b36; border-radius: 15px; padding: 20px; }
     hr { border-color: #36404e; }
     .news-card { background-color: #232b36; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 4px solid #00d09c; }
@@ -81,7 +81,9 @@ def search_symbol(query):
 @st.cache_data(ttl=3600)
 def get_stock_data(ticker):
     try:
+        # Create Ticker Object
         stock = yf.Ticker(ticker)
+        
         # Accessing info triggers the request
         info = stock.info
         
@@ -101,13 +103,14 @@ def get_stock_data(ticker):
         div_history = stock.dividends
         news = stock.news
         
-        # Fetch max history once to be sliced later for performance metrics and charts
+        # Fetch max history once to be sliced later for performance metrics and long-term charts
         # This saves multiple API calls
         history = stock.history(period="max", interval="1d")
         if history.index.tz is not None:
             history.index = history.index.tz_localize(None)
         
-        # IMPORTANT: Do NOT return the 'stock' object itself, it is not serializable.
+        # IMPORTANT: We do NOT return the 'stock' object here because it cannot be pickled/cached.
+        # We only return the serializable data.
         return info, financials, balance_sheet, cash_flow, q_financials, q_balance_sheet, div_history, news, history
     except Exception as e:
         print(f"Error fetching data: {e}")
@@ -138,7 +141,7 @@ if "ticker" not in st.query_params:
     st.query_params["ticker"] = "AAPL"
 ticker = st.query_params["ticker"]
 
-# Unpacking the data (Removed 'stock' from the tuple)
+# Unpacking the data (Note: 'stock' object is NOT returned)
 info, financials, balance_sheet, cash_flow, q_financials, q_balance_sheet, div_history, news_list, full_history = get_stock_data(ticker)
 
 if not info or 'currentPrice' not in info:
@@ -277,10 +280,17 @@ else:
 
 roe = info.get('returnOnEquity', 0) or 0
 de = info.get('debtToEquity', 0) or 0
-pe = info.get('trailingPE', 0) or 0
 beta = info.get('beta', 1.0) or 1.0
 
-# PEG Logic - fallback to "N/A" rather than 1-year calc which is volatile
+# --- P/E RATIOS: GAAP vs FORWARD ---
+pe = info.get('trailingPE', 0) or 0      # GAAP / TTM
+fwd_pe = info.get('forwardPE', 0) or 0   # Non-GAAP / Estimate
+
+# Fallback for Fwd P/E if missing
+if fwd_pe == 0 and info.get('forwardEps', 0) > 0:
+    fwd_pe = current_price / info['forwardEps']
+
+# PEG Ratio (Prioritize reported, else calc)
 peg = info.get('pegRatio', 0)
 if peg is None: peg = 0 
 
@@ -316,8 +326,8 @@ v_score = 0
 v_details = []
 s, t = check(current_price < fair_value, f"Below Fair Value ({current_price:.2f} < {fair_value:.2f})"); v_score+=s; v_details.append(t)
 s, t = check(current_price < fair_value * 0.8, f"Significantly Below Fair Value ({current_price:.2f} < {(fair_value*0.8):.2f})"); v_score+=s; v_details.append(t)
-s, t = check(pe > 0 and pe < 25, f"P/E ({pe:.1f}x) < Market (25x)"); v_score+=s; v_details.append(t)
-s, t = check(pe > 0 and pe < 35, f"P/E ({pe:.1f}x) < Peers (35x)"); v_score+=s; v_details.append(t)
+s, t = check(pe > 0 and pe < 25, f"GAAP P/E ({pe:.1f}x) < Market (25x)"); v_score+=s; v_details.append(t)
+s, t = check(fwd_pe > 0 and fwd_pe < 20, f"Fwd P/E ({fwd_pe:.1f}x) < 20x"); v_score+=s; v_details.append(t)
 s, t = check(peg > 0 and peg < 1.5, f"PEG Ratio within ideal range ({peg:.2f} < 1.5x)"); v_score+=s; v_details.append(t)
 s, t = check(analyst_fv > 0 and current_price < analyst_fv, f"Below Analyst Target ({current_price:.2f} < {analyst_fv:.2f})"); v_score+=s; v_details.append(t)
 
@@ -465,11 +475,15 @@ st.markdown(f"### {info.get('shortName', ticker)} ({ticker})")
 st.write(info.get('longBusinessSummary', '')[:350] + "...")
 
 # --- METRICS ROW (GAUGES + NUMBERS) ---
-m1, m2, m3, m4 = st.columns(4)
+m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("Price", f"${current_price:.2f}")
 m2.metric("Market Cap", f"${(info.get('marketCap',0)/1e9):.1f}B")
 m3.metric("Beta", f"{info.get('beta', 0):.2f}")
-m4.metric("PE Ratio", f"{info.get('trailingPE',0):.1f}")
+
+# P/E SPLIT (GAAP vs FORWARD)
+m4.metric("GAAP P/E (TTM)", f"{pe:.1f}x")
+pe_delta = fwd_pe - pe
+m5.metric("Fwd P/E (Est)", f"{fwd_pe:.1f}x", delta=f"{pe_delta:.1f}x" if pe>0 else None, delta_color="inverse")
 
 g1, g2, g3 = st.columns(3)
 g1.plotly_chart(create_gauge(beta, 0, 3, "Beta", suffix="x"), use_container_width=True)
@@ -626,10 +640,10 @@ with c_val1:
     st.plotly_chart(fig_v, use_container_width=True)
 
 with c_val2:
-    g1 = create_gauge(pe, 0, 50, "P/E Ratio", suffix="x", color="#ff6384" if pe>30 else "#00d09c")
-    st.plotly_chart(g1, use_container_width=True)
-    g2 = create_gauge(peg, 0, 3, "PEG Ratio", color="#00d09c" if peg<1.5 else "#ff6384")
-    st.plotly_chart(g2, use_container_width=True)
+    # 3 Gauges now: GAAP PE, Fwd PE, PEG
+    st.plotly_chart(create_gauge(pe, 0, 60, "GAAP P/E (TTM)", suffix="x", color="#ff6384" if pe>40 else "#00d09c"), use_container_width=True)
+    st.plotly_chart(create_gauge(fwd_pe, 0, 60, "Fwd P/E (Est)", suffix="x", color="#36a2eb"), use_container_width=True)
+    st.plotly_chart(create_gauge(peg, 0, 3, "PEG Ratio", color="#00d09c" if peg<1.5 else "#ff6384"), use_container_width=True)
 
 st.divider()
 
